@@ -6,7 +6,7 @@
 
 - Прочитайте [README.md](README.md) и [FAQ](README.md#faq).
 - Проверьте, нет ли уже похожего issue или pull request.
-- Для вопросов и обсуждений используйте [Discussions](https://github.com/NetlYouTube/UniStore/discussions).
+- Для вопросов и обсуждений используйте [Discussions](https://github.com/NetlApps/UniStore/discussions).
 - Для уязвимостей используйте [SECURITY.md](SECURITY.md), а не публичный issue.
 
 ## Сообщение об ошибке

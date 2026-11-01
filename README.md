@@ -12,7 +12,7 @@
   [![Release](https://img.shields.io/badge/release-1.1.7-6366F1)](../../releases/latest)
   [![APK](https://img.shields.io/badge/APK-~2%20MB-22C55E)](#установка)
   [![Tests](https://img.shields.io/badge/tests-86%20passed-16A34A)](#качество-и-проверка)
-  [![CI](https://github.com/NetlYouTube/UniStore/actions/workflows/android-ci.yml/badge.svg)](https://github.com/NetlYouTube/UniStore/actions/workflows/android-ci.yml)
+  [![CI](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml/badge.svg)](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml)
 </div>
 
 > **Статус:** активная разработка. Последний релиз — **1.1.7** (versionCode 11). Приложение проверено на Xiaomi `2511FPC34G` (Android 16, HyperOS 3).
@@ -204,7 +204,7 @@ Get-FileHash .\UniStore-1.1.7.apk -Algorithm SHA256
 Проект использует JDK 17, Android SDK 35, Gradle 8.11.1 и Android Gradle Plugin 8.7.3. В репозитории есть Gradle Wrapper.
 
 ```bash
-git clone https://github.com/NetlYouTube/UniStore.git
+git clone https://github.com/NetlApps/UniStore.git
 cd UniStore
 ./gradlew :app:assembleDebug
 ```
@@ -357,13 +357,13 @@ UniStore проверяет пакет, версию и сертификат APK
 
 ## Участие в разработке
 
-Issues и pull request'ы приветствуются. Перед созданием issue прочитайте [CONTRIBUTING.md](CONTRIBUTING.md); для уязвимостей используйте [SECURITY.md](SECURITY.md), а не публичный issue. Вопросы и обсуждения — в [Discussions](https://github.com/NetlYouTube/UniStore/discussions).
+Issues и pull request'ы приветствуются. Перед созданием issue прочитайте [CONTRIBUTING.md](CONTRIBUTING.md); для уязвимостей используйте [SECURITY.md](SECURITY.md), а не публичный issue. Вопросы и обсуждения — в [Discussions](https://github.com/NetlApps/UniStore/discussions).
 
 - Для баг-репорта используйте форму «Сообщение об ошибке»: она попросит версию UniStore, Android, устройство, магазин, шаги и `logcat` с тегом `UpdateHub`.
 - Перед PR запустите `./gradlew :app:testDebugUnitTest :app:lintDebug`.
 - Не коммитьте `local.properties`, приватные ключи, скачанные APK и содержимое `tools/`.
 - Для новых магазинов приложите пример страницы, с которой снимается версия, и объясните, есть ли у магазина публичный API.
-- Раз в день GitHub Actions обновляет закреплённый issue [«Ежедневная сводка по issues и PR»](https://github.com/NetlYouTube/UniStore/issues/1) и отмечает `@NetlYouTube`. Чтобы разобрать свежую сводку, напишите в OpenCode: «разбери свежую сводку».
+- Раз в день GitHub Actions обновляет закреплённый issue [«Ежедневная сводка по issues и PR»](https://github.com/NetlApps/UniStore/issues/1) и отмечает `@NetlApps`. Чтобы разобрать свежую сводку, напишите в OpenCode: «разбери свежую сводку».
 
 ## Лицензия
 

@@ -6,7 +6,7 @@
 
 ## Как сообщить об уязвимости
 
-Не открывайте публичный issue. Используйте приватный отчёт через [GitHub Security Advisories](https://github.com/NetlYouTube/UniStore/security/advisories/new).
+Не открывайте публичный issue. Используйте приватный отчёт через [GitHub Security Advisories](https://github.com/NetlApps/UniStore/security/advisories/new).
 
 В отчёте укажите:
 
