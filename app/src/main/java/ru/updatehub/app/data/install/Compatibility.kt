@@ -1,10 +1,32 @@
 package ru.updatehub.app.data.install
 
+import ru.updatehub.app.data.UpdateSource
 import ru.updatehub.app.data.checkers.VersionDetails
 
 private val thirtyTwoBitAbis = setOf("armeabi", "armeabi-v7a", "x86", "mips")
 
 private fun normalizeAbi(abi: String): String = abi.trim().lowercase().replace('_', '-')
+
+/**
+ * True when the phone has no 32-bit ABI at all. Such a device can only run
+ * arm64/x86_64 native code, so a 32-bit-only store build is guaranteed to fail
+ * at install time.
+ */
+internal fun is64BitOnlyDevice(supportedAbis: List<String>): Boolean {
+    val deviceAbis = supportedAbis.mapTo(LinkedHashSet(), ::normalizeAbi)
+    return deviceAbis.isNotEmpty() && deviceAbis.none { it in thirtyTwoBitAbis }
+}
+
+/**
+ * APKPure can return a version before its ABI metadata is available (the JSON
+ * API may be unreachable while the HTML page still answers). On a 64-bit-only
+ * phone an unverified APKPure build may be a 32-bit-only APK that cannot be
+ * installed, so such a candidate is withheld until the metadata is readable.
+ */
+internal fun storeMetadataMustBeVerified(
+    source: UpdateSource,
+    supportedAbis: List<String>
+): Boolean = source == UpdateSource.APKPURE && is64BitOnlyDevice(supportedAbis)
 
 /**
  * Checks the lightweight metadata from a store's download page before the APK

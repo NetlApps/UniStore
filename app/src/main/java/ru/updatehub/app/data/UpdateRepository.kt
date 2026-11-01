@@ -22,6 +22,7 @@ import ru.updatehub.app.data.checkers.StorePrefetcher
 import ru.updatehub.app.data.checkers.VersionDetailsProvider
 import ru.updatehub.app.data.checkers.clearRouteMemory
 import ru.updatehub.app.data.install.metadataCompatibilityError
+import ru.updatehub.app.data.install.storeMetadataMustBeVerified
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -321,27 +322,39 @@ class UpdateRepository(
                         }
                     }
                 }
-                version to details?.let {
+                val error = details?.let {
                     metadataCompatibilityError(it, deviceSdk, supportedAbis)
                 }
+                Triple(version, details, error)
             }
         }.awaitAll()
 
         val compatibleVersions = mutableListOf<StoreVersion>()
         val deviceIncompatibleVersions = mutableListOf<StoreVersion>()
+        // APKPure can report a version while its ABI data is unavailable.
+        // On a 64-bit-only phone such a build may be a 32-bit APK that will
+        // fail at install time, so it is withheld until the next check.
+        val unverifiedVersions = mutableListOf<StoreVersion>()
         var deviceIncompatibleReason: String? = null
-        compatibility.forEach { (version, error) ->
-            if (error == null) {
-                compatibleVersions += version
-            } else {
-                deviceIncompatibleVersions += version
-                if (deviceIncompatibleReason == null) deviceIncompatibleReason = error
+        compatibility.forEach { (version, details, error) ->
+            when {
+                error != null -> {
+                    deviceIncompatibleVersions += version
+                    if (deviceIncompatibleReason == null) deviceIncompatibleReason = error
+                }
+
+                details == null &&
+                    storeMetadataMustBeVerified(version.source, supportedAbis) ->
+                    unverifiedVersions += version
+
+                else -> compatibleVersions += version
             }
         }
 
         val versions = compatibleVersions
         val best = newestVersion(compatibleVersions)
             ?: newestVersion(deviceIncompatibleVersions)
+            ?: newestVersion(unverifiedVersions)
 
         val errors = outcomes.mapNotNull { (source, outcome) ->
             (outcome as? CheckOutcome.Failed)?.let { "${source.title}: ${it.message}" }
@@ -350,6 +363,7 @@ class UpdateRepository(
         val status = when {
             compatibleVersions.isNotEmpty() -> UpdateStatus.UPDATE_AVAILABLE
             deviceIncompatibleVersions.isNotEmpty() -> UpdateStatus.INCOMPATIBLE
+            unverifiedVersions.isNotEmpty() -> UpdateStatus.INCOMPATIBLE
             foundVersions.isNotEmpty() -> UpdateStatus.UP_TO_DATE
             signatureIncompatibleCount > 0 -> UpdateStatus.UP_TO_DATE
             errors.isNotEmpty() -> UpdateStatus.ERROR
@@ -357,8 +371,14 @@ class UpdateRepository(
         }
 
         val message = when {
+            status == UpdateStatus.INCOMPATIBLE && deviceIncompatibleReason != null ->
+                deviceIncompatibleReason
+
+            status == UpdateStatus.INCOMPATIBLE && unverifiedVersions.isNotEmpty() ->
+                "Не удалось проверить совместимость версии с этим телефоном"
+
             status == UpdateStatus.INCOMPATIBLE ->
-                deviceIncompatibleReason ?: "Версия несовместима с этим телефоном"
+                "Версия несовместима с этим телефоном"
 
             status == UpdateStatus.ERROR -> errors.take(2).joinToString("; ")
             versions.isEmpty() && signatureIncompatibleCount > 0 ->

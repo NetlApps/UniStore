@@ -7,6 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.updatehub.app.data.checkers.CheckOutcome
 import ru.updatehub.app.data.checkers.StoreChecker
+import ru.updatehub.app.data.checkers.VersionDetails
+import ru.updatehub.app.data.checkers.VersionDetailsProvider
 
 class UpdateRepositoryTest {
 
@@ -22,6 +24,15 @@ class UpdateRepositoryTest {
         }
     }
 
+    private class UnverifiedApkPureChecker : StoreChecker, VersionDetailsProvider {
+        override val source: UpdateSource = UpdateSource.APKPURE
+
+        override suspend fun check(packageName: String): CheckOutcome =
+            CheckOutcome.Found(versionName = "2.0.0")
+
+        override suspend fun details(packageName: String): VersionDetails? = null
+    }
+
     private fun installed(signature: String?) = InstalledApp(
         packageName = "com.example.app",
         label = "Example",
@@ -32,10 +43,13 @@ class UpdateRepositoryTest {
         signature = signature
     )
 
-    private fun repository(checker: StoreChecker) = UpdateRepository(
+    private fun repository(
+        checker: StoreChecker,
+        supportedAbis: List<String> = listOf("arm64-v8a")
+    ) = UpdateRepository(
         checkers = listOf(checker),
         deviceSdk = 35,
-        supportedAbis = listOf("arm64-v8a")
+        supportedAbis = supportedAbis
     )
 
     @Test
@@ -67,6 +81,39 @@ class UpdateRepositoryTest {
         ).getValue(app.packageName)
 
         assertEquals(1, checker.calls)
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, result.status)
+        assertNotNull(result.best)
+    }
+
+    @Test
+    fun apkPureVersionWithoutAbiMetadataIsWithheldOn64BitOnlyPhone() = runBlocking {
+        val checker = UnverifiedApkPureChecker()
+        val app = installed("0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9")
+
+        val result = repository(checker).checkAll(
+            packages = setOf(app.packageName),
+            sources = setOf(UpdateSource.APKPURE),
+            installed = mapOf(app.packageName to app)
+        ).getValue(app.packageName)
+
+        assertEquals(UpdateStatus.INCOMPATIBLE, result.status)
+        assertTrue(result.message.orEmpty().contains("Не удалось проверить совместимость"))
+    }
+
+    @Test
+    fun apkPureVersionWithoutAbiMetadataIsOfferedOn32BitCapablePhone() = runBlocking {
+        val checker = UnverifiedApkPureChecker()
+        val app = installed("0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9")
+
+        val result = repository(
+            checker,
+            supportedAbis = listOf("arm64-v8a", "armeabi-v7a")
+        ).checkAll(
+            packages = setOf(app.packageName),
+            sources = setOf(UpdateSource.APKPURE),
+            installed = mapOf(app.packageName to app)
+        ).getValue(app.packageName)
+
         assertEquals(UpdateStatus.UPDATE_AVAILABLE, result.status)
         assertNotNull(result.best)
     }

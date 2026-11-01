@@ -1,8 +1,11 @@
 package ru.updatehub.app.data.install
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import ru.updatehub.app.data.UpdateSource
 import ru.updatehub.app.data.checkers.VersionDetails
 import java.io.File
 import java.util.zip.ZipEntry
@@ -115,6 +118,27 @@ class ApkCompatibilityTest {
                 supportedAbis = listOf("arm64-v8a")
             )
         )
+    }
+
+    @Test
+    fun unverifiedMetadataIsRequiredOnlyForApkPureOnSixtyFourBitOnlyPhones() {
+        assertTrue(storeMetadataMustBeVerified(UpdateSource.APKPURE, listOf("arm64-v8a")))
+        assertFalse(
+            storeMetadataMustBeVerified(
+                UpdateSource.APKPURE,
+                listOf("arm64-v8a", "armeabi-v7a")
+            )
+        )
+        assertFalse(storeMetadataMustBeVerified(UpdateSource.RUSTORE, listOf("arm64-v8a")))
+        assertFalse(storeMetadataMustBeVerified(UpdateSource.APKPURE, emptyList()))
+    }
+
+    @Test
+    fun sixtyFourBitOnlyDeviceNeedsNoThirtyTwoBitAbi() {
+        assertTrue(is64BitOnlyDevice(listOf("arm64-v8a")))
+        assertFalse(is64BitOnlyDevice(listOf("arm64-v8a", "armeabi-v7a")))
+        assertFalse(is64BitOnlyDevice(listOf("x86_64", "x86")))
+        assertFalse(is64BitOnlyDevice(emptyList()))
     }
 
     @Test
