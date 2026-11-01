@@ -53,16 +53,19 @@ class StoreHealthTest {
         val urls = UpdateSource.entries.map { it.healthUrl }
         assertTrue(urls.all { it.startsWith("https://") })
         assertEquals(urls.size, urls.distinct().size)
+        // The APKPure root answers HEAD with a Cloudflare 403, which made a
+        // healthy catalogue look offline. The category page is a real 200.
+        assertEquals("https://apkpure.com/app", UpdateSource.APKPURE.healthUrl)
     }
 
     @Test
     fun slowSourcesHaveBoundedLookupTime() {
-        assertEquals(20_000L, sourceTimeoutMillis(UpdateSource.GOOGLE_PLAY))
-        assertEquals(12_000L, sourceTimeoutMillis(UpdateSource.APKPURE))
-        assertEquals(10_000L, sourceTimeoutMillis(UpdateSource.RUSTORE))
-        assertEquals(11_000L, sourceTimeoutMillis(UpdateSource.GETAPPS))
+        assertEquals(27_000L, sourceTimeoutMillis(UpdateSource.GOOGLE_PLAY))
+        assertEquals(22_000L, sourceTimeoutMillis(UpdateSource.APKPURE))
+        assertEquals(12_000L, sourceTimeoutMillis(UpdateSource.RUSTORE))
+        assertEquals(12_000L, sourceTimeoutMillis(UpdateSource.GETAPPS))
         assertTrue(
-            UpdateSource.entries.all { sourceTimeoutMillis(it) in 1_000L..25_000L }
+            UpdateSource.entries.all { sourceTimeoutMillis(it) in 1_000L..30_000L }
         )
     }
 

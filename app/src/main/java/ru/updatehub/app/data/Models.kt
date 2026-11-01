@@ -199,7 +199,9 @@ enum class UpdateSource(
             RUSTORE -> "https://www.rustore.ru/"
             GETAPPS -> "https://global.app.mi.com/"
             GALAXY_STORE -> "https://galaxystore.samsung.com/"
-            APKPURE -> "https://apkpure.com/"
+            // The root page answers HEAD with Cloudflare 403 even when the
+            // catalogue is reachable. A category page is a real 200.
+            APKPURE -> "https://apkpure.com/app"
             FDROID -> "https://f-droid.org/"
             APTOIDE -> "https://en.aptoide.com/"
             VIVO_STORE -> "https://h5.appstore.vivo.com.cn/"

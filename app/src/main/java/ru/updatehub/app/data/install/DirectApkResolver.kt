@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import ru.updatehub.app.data.UpdateSource
+import ru.updatehub.app.data.checkers.ApkPureApi
 import java.util.concurrent.TimeUnit
 
 data class ApkDownloadSpec(
@@ -20,9 +21,12 @@ data class ApkDownloadSpec(
  * and Galaxy Store do not publish direct APK links, so those keep using the
  * normal store handoff.
  */
-class DirectApkResolver {
+class DirectApkResolver(
+    private val deviceAbis: List<String> = emptyList()
+) {
 
     private val client = OkHttpClient.Builder()
+        .dns(ru.updatehub.app.data.checkers.StoreDns.resolver)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(30, TimeUnit.SECONDS)
@@ -36,21 +40,29 @@ class DirectApkResolver {
             when (source) {
                 UpdateSource.RUSTORE -> resolveRuStore(packageName)
                 UpdateSource.FDROID -> resolveFdroid(packageName)
-                UpdateSource.APKPURE -> ApkDownloadSpec(
-                    source = source,
-                    // The XAPK endpoint returns the full bundle. For apps
-                    // published as a single APK it redirects to that APK.
-                    // The global host is used instead of the regional
-                    // d-ru.apkpure.com mirror: the mirror now redirects every
-                    // file request to the HTML home page, while the global
-                    // host serves the file once the page cookies are warmed.
-                    url = "https://d.apkpure.com/b/XAPK/$packageName?version=latest"
-                )
-
+                UpdateSource.APKPURE -> resolveApkPure(packageName)
                 UpdateSource.APTOIDE -> resolveAptoide(packageName)
                 else -> error("Для ${source.title} нет прямой ссылки на APK")
             }
         }
+
+    /**
+     * APKPure's API returns a fresh signed data.winudf.com URL for the exact
+     * variant matching this phone. Downloading that URL avoids the WebView
+     * cookie dance around d.apkpure.com, which is fragile on mobile data.
+     */
+    private suspend fun resolveApkPure(packageName: String): ApkDownloadSpec {
+        val release = ApkPureApi.latest(packageName, deviceAbis)
+        val directUrl = release?.downloadUrl?.takeIf { it.isNotBlank() }
+        return ApkDownloadSpec(
+            source = UpdateSource.APKPURE,
+            url = directUrl
+                // Fallback for the rare case when the API has no asset URL:
+                // the XAPK endpoint returns the full bundle. For apps
+                // published as a single APK it redirects to that APK.
+                ?: "https://d.apkpure.com/b/XAPK/$packageName?version=latest"
+        )
+    }
 
     private fun resolveRuStore(packageName: String): ApkDownloadSpec {
         val infoBody = get(

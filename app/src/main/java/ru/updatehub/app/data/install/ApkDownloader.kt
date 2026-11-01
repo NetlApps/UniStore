@@ -2,10 +2,12 @@ package ru.updatehub.app.data.install
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
@@ -55,6 +57,7 @@ class ApkDownloader(private val context: Context) {
     }
 
     private val baseClient = OkHttpClient.Builder()
+        .dns(ru.updatehub.app.data.checkers.StoreDns.resolver)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         // Large APKs must not be killed by a total call timeout.
@@ -305,52 +308,75 @@ class ApkDownloader(private val context: Context) {
 
             ranges.map { range ->
                 async(Dispatchers.IO) {
-                    val partRequest = request.newBuilder()
-                        .header("Range", "bytes=${range.start}-${range.endInclusive}")
-                        .build()
-                    baseClient.newCall(partRequest).execute().use { response ->
-                        if (response.code != 206) {
-                            error("Сервер не поддержал Range: ${response.code}")
-                        }
-                        val contentRange = parseContentRange(
-                            response.header("Content-Range")
-                        ) ?: error("Сервер не вернул Content-Range")
-                        if (contentRange.start != range.start ||
-                            contentRange.endInclusive != range.endInclusive
-                        ) {
-                            error("Сервер вернул неверный Content-Range")
-                        }
-                        if (contentRange.total != null && contentRange.total != total) {
-                            error("Размер файла изменился во время загрузки")
-                        }
-                        if (response.header("Content-Encoding")?.let {
-                                !it.equals("identity", ignoreCase = true)
-                            } == true
-                        ) {
-                            error("Сервер сжал часть диапазона")
-                        }
-                        val body = response.body ?: error("Пустой ответ")
-                        RandomAccessFile(temporary, "rw").use { file ->
-                            file.seek(range.start)
-                            body.byteStream().use { input ->
-                                val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
-                                var written = 0L
-                                while (true) {
-                                    coroutineContext.ensureActive()
-                                    val read = input.read(buffer)
-                                    if (read < 0) break
-                                    file.write(buffer, 0, read)
-                                    written += read
-                                    downloaded.addAndGet(read.toLong())
-                                    report()
+                    // A single CDN reset should not throw away a 300 MB
+                    // download. Retry the failed part a few times and remove
+                    // only its already counted bytes; the other parts keep
+                    // their data in the preallocated file.
+                    var attempt = 0
+                    while (true) {
+                        var written = 0L
+                        try {
+                            val partRequest = request.newBuilder()
+                                .header("Range", "bytes=${range.start}-${range.endInclusive}")
+                                .build()
+                            baseClient.newCall(partRequest).execute().use { response ->
+                                if (response.code != 206) {
+                                    error("Сервер не поддержал Range: ${response.code}")
                                 }
-                                if (written != range.length) {
-                                    error(
-                                        "Часть ${range.start}-${range.endInclusive} " +
-                                            "недокачана: $written из ${range.length}"
-                                    )
+                                val contentRange = parseContentRange(
+                                    response.header("Content-Range")
+                                ) ?: error("Сервер не вернул Content-Range")
+                                if (contentRange.start != range.start ||
+                                    contentRange.endInclusive != range.endInclusive
+                                ) {
+                                    error("Сервер вернул неверный Content-Range")
+                                }
+                                if (contentRange.total != null && contentRange.total != total) {
+                                    error("Размер файла изменился во время загрузки")
+                                }
+                                if (response.header("Content-Encoding")?.let {
+                                        !it.equals("identity", ignoreCase = true)
+                                    } == true
+                                ) {
+                                    error("Сервер сжал часть диапазона")
+                                }
+                                val body = response.body ?: error("Пустой ответ")
+                                RandomAccessFile(temporary, "rw").use { file ->
+                                    file.seek(range.start)
+                                    body.byteStream().use { input ->
+                                        val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                                        while (true) {
+                                            coroutineContext.ensureActive()
+                                            val read = input.read(buffer)
+                                            if (read < 0) break
+                                            file.write(buffer, 0, read)
+                                            written += read
+                                            downloaded.addAndGet(read.toLong())
+                                            report()
+                                        }
+                                    }
                                 }
                             }
+                            if (written != range.length) {
+                                error(
+                                    "Часть ${range.start}-${range.endInclusive} " +
+                                        "недокачана: $written из ${range.length}"
+                                )
+                            }
+                            break
+                        } catch (t: Throwable) {
+                            downloaded.addAndGet(-written)
+                            if (t is CancellationException || attempt >= MAX_PART_RETRIES) {
+                                throw t
+                            }
+                            attempt++
+                            Log.w(
+                                TAG,
+                                "Часть ${range.start}-${range.endInclusive} прервана " +
+                                    "на $written байт, повтор $attempt",
+                                t
+                            )
+                            delay(PART_RETRY_DELAY_MS * attempt)
                         }
                     }
                 }
@@ -518,6 +544,8 @@ class ApkDownloader(private val context: Context) {
         const val TAG = "UpdateHub"
         const val DOWNLOAD_BUFFER_BYTES = 128 * 1024
         const val DEFAULT_MAX_CONNECTIONS = 4
+        const val MAX_PART_RETRIES = 2
+        const val PART_RETRY_DELAY_MS = 700L
         // APKPure sits behind Cloudflare. Its bot check lets the desktop
         // Chrome signature used by the metadata checkers through and answers
         // mobile user agents with a "Just a moment..." challenge.

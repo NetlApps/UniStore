@@ -34,10 +34,13 @@ object Http {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+    private val dns = StoreDns.resolver
+
     private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
+        .dns(dns)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
         // Keep TLS/HTTP2 connections alive across probes, checks and the
         // single-app install flow. Reusing a warm connection removes a full
         // DNS + TCP + TLS handshake from every store request.
@@ -50,9 +53,9 @@ object Http {
     // Google Play pages are large; a 15 second total timeout is too tight on
     // mobile networks and used to disable the source after a few failures.
     private val slowClient = client.newBuilder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
-        .callTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(35, TimeUnit.SECONDS)
         .build()
 
     // Short-lived client for the connection indicators. The first HEAD is a
@@ -61,7 +64,7 @@ object Http {
     private val probeClient = client.newBuilder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
-        .callTimeout(9, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
@@ -72,9 +75,9 @@ object Http {
     // would derive :authority from the URL.
     private val frontedClient = slowClient.newBuilder()
         .protocols(listOf(Protocol.HTTP_1_1))
-        // Leave room for the direct fallback inside the 20-second source
-        // budget when the frontend is unreachable.
-        .callTimeout(10, TimeUnit.SECONDS)
+        // The route chain cancels this call at its own nine-second limit.
+        // Keeping the OkHttp limit slightly higher lets the chain decide.
+        .callTimeout(12, TimeUnit.SECONDS)
         .build()
 
     private val frontedProbeClient = probeClient.newBuilder()
@@ -85,6 +88,16 @@ object Http {
         url: String,
         headers: Map<String, String> = emptyMap()
     ): HttpResult = execute(client, buildGetRequest(url, headers))
+
+    /**
+     * Called when the active network changes. DNS answers and TLS sockets
+     * belong to the previous link; keeping them would make the first check
+     * after switching Wi-Fi/LTE wait for dead connections and stale DNS.
+     */
+    fun resetNetworkState() {
+        dns.clear()
+        client.connectionPool.evictAll()
+    }
 
     /**
      * HEAD is used to resolve a download URL without transferring the APK.
@@ -168,22 +181,40 @@ object Http {
     /**
      * Measures how fast a store answers a HEAD request. The first request is
      * a warm-up: it pays for DNS, TCP and TLS and is not representative of
-     * the store speed. The second request reuses the pooled HTTP/2 connection
-     * and gives the real response time. Returns null for a timeout, a
-     * DNS/TLS failure or a server-side 5xx response.
+     * the store speed. The second request reuses the pooled connection and
+     * gives the real response time.
+     *
+     * Google Play is tried through the frontend first and directly second,
+     * so a carrier that filters only play.google.com does not make the
+     * indicator red while checks still work through the other route.
      */
-    suspend fun probe(url: String): HttpProbe? {
-        val warmup = probeOnce(url) ?: return null
-        if (warmup.code >= 500) return null
-        return probeOnce(url) ?: warmup
+    suspend fun probe(
+        url: String,
+        headers: Map<String, String> = emptyMap()
+    ): HttpProbe? {
+        val target = url.toHttpUrlOrNull()
+        val playHost = target?.host == "play.google.com"
+        val variants = if (playHost) listOf(true, false) else listOf(false)
+        for (fronted in variants) {
+            val warmup = probeOnce(url, headers, fronted) ?: continue
+            if (!warmup.isHealthy) continue
+            return probeOnce(url, headers, fronted)?.takeIf { it.isHealthy } ?: warmup
+        }
+        return null
     }
 
-    private suspend fun probeOnce(url: String): HttpProbe? =
+    private val HttpProbe.isHealthy: Boolean
+        get() = code in 200..399
+
+    private suspend fun probeOnce(
+        url: String,
+        headers: Map<String, String>,
+        fronted: Boolean
+    ): HttpProbe? =
         suspendCancellableCoroutine<HttpProbe?> { continuation ->
             val target = url.toHttpUrlOrNull()
-            val fronted = target != null && target.host == "play.google.com"
-            val requestUrl = if (fronted) {
-                target!!.newBuilder().host("www.google.com").build().toString()
+            val requestUrl = if (fronted && target != null) {
+                target.newBuilder().host("www.google.com").build().toString()
             } else {
                 url
             }
@@ -191,7 +222,8 @@ object Http {
                 .url(requestUrl)
                 .header("User-Agent", USER_AGENT)
                 .header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
-            if (fronted) builder.header("Host", target!!.host)
+            if (fronted && target != null) builder.header("Host", target.host)
+            headers.forEach { (name, value) -> builder.header(name, value) }
             val request = builder.head().build()
             val call = if (fronted) {
                 frontedProbeClient.newCall(request)
@@ -236,6 +268,43 @@ object Http {
             }
             .build()
     }
+
+    /**
+     * Form POST used by Google Play's batchexecute data endpoint. The same
+     * reason as [getFronted] applies: on LTE only www.google.com is reachable,
+     * so the request goes there while the Host header selects Play.
+     */
+    suspend fun postFormFronted(
+        url: String,
+        host: String,
+        body: String,
+        headers: Map<String, String> = emptyMap()
+    ): HttpResult = execute(
+        frontedClient,
+        buildFormPostRequest(url, body, headers + ("Host" to host))
+    )
+
+    suspend fun postForm(
+        url: String,
+        body: String,
+        headers: Map<String, String> = emptyMap()
+    ): HttpResult = execute(client, buildFormPostRequest(url, body, headers))
+
+    private fun buildFormPostRequest(
+        url: String,
+        body: String,
+        headers: Map<String, String>
+    ): Request = Request.Builder()
+        .url(url)
+        .post(body.toRequestBody("application/x-www-form-urlencoded; charset=utf-8".toMediaType()))
+        .header("User-Agent", USER_AGENT)
+        .header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+        .header("Accept", "*/*")
+        .header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+        .apply {
+            headers.forEach { (name, value) -> header(name, value) }
+        }
+        .build()
 
     suspend fun postJson(
         url: String,

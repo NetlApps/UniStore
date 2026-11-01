@@ -305,6 +305,7 @@ fun SettingsScreen(
                             SourcesSettingsSection(
                                 enabledSources = state.settings.enabledSources,
                                 storeHealth = state.storeHealth,
+                                vpnBypassed = state.vpnBypassed,
                                 onToggleSource = onToggleSource
                             )
                         }
@@ -690,6 +691,7 @@ private fun PaletteChip(
 private fun SourcesSettingsSection(
     enabledSources: Set<String>,
     storeHealth: Map<UpdateSource, StoreHealth>,
+    vpnBypassed: Boolean,
     onToggleSource: (UpdateSource) -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -740,7 +742,7 @@ private fun SourcesSettingsSection(
                 title = "Топ-5 универсальных",
                 subtitle = "Работают на любом Android-телефоне"
             )
-            SourceRows(universal, enabledSources, storeHealth, onToggleSource)
+            SourceRows(universal, enabledSources, storeHealth, vpnBypassed, onToggleSource)
 
             Spacer(Modifier.height(16.dp))
 
@@ -748,7 +750,7 @@ private fun SourcesSettingsSection(
                 title = "Магазины производителей",
                 subtitle = "Для техники конкретного бренда"
             )
-            SourceRows(manufacturer, enabledSources, storeHealth, onToggleSource)
+            SourceRows(manufacturer, enabledSources, storeHealth, vpnBypassed, onToggleSource)
         } else {
             val filtered = (universal + manufacturer).filter(::matches)
             if (filtered.isEmpty()) {
@@ -760,7 +762,7 @@ private fun SourcesSettingsSection(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
             } else {
-                SourceRows(filtered, enabledSources, storeHealth, onToggleSource)
+                SourceRows(filtered, enabledSources, storeHealth, vpnBypassed, onToggleSource)
             }
         }
 
@@ -827,6 +829,7 @@ private fun SourceRows(
     sources: List<UpdateSource>,
     enabledSources: Set<String>,
     storeHealth: Map<UpdateSource, StoreHealth>,
+    vpnBypassed: Boolean,
     onToggleSource: (UpdateSource) -> Unit
 ) {
     sources.forEachIndexed { index, source ->
@@ -844,6 +847,7 @@ private fun SourceRows(
             source = source,
             enabled = source.key in enabledSources,
             health = storeHealth[source],
+            vpnBypassed = vpnBypassed,
             onToggle = { onToggleSource(source) }
         )
     }
@@ -990,6 +994,7 @@ private fun SourceSettingsRow(
     source: UpdateSource,
     enabled: Boolean,
     health: StoreHealth?,
+    vpnBypassed: Boolean,
     onToggle: () -> Unit
 ) {
     val healthColor = when (health?.connection) {
@@ -999,8 +1004,13 @@ private fun SourceSettingsRow(
     }
     val statusText = when {
         health == null -> source.subtitle
+        vpnBypassed &&
+            health.connection == StoreConnection.OFFLINE &&
+            source in setOf(UpdateSource.GOOGLE_PLAY, UpdateSource.APKPURE) ->
+            "VPN активен · UniStore вне туннеля"
+
         source == UpdateSource.GOOGLE_PLAY && health.connection == StoreConnection.OFFLINE ->
-            "Нет связи · проверьте VPN"
+            "Нет связи · проверьте сеть"
 
         else -> storeHealthLabel(health)
     }

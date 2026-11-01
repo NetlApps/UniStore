@@ -34,8 +34,8 @@ android {
         applicationId = "ru.updatehub.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.1.7"
+        versionCode = 12
+        versionName = "1.1.8"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -122,4 +122,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // Android's mockable android.jar stubs org.json in JVM tests. The real
+    // implementation lets ApkPureApi parsing be tested without an emulator.
+    testImplementation("org.json:json:20240303")
 }

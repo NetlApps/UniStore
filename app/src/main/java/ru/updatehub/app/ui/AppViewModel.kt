@@ -1,6 +1,8 @@
 package ru.updatehub.app.ui
 
 import android.app.Application
+import android.os.PowerManager
+import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -98,7 +100,9 @@ data class UiState(
     val showSystemApps: Boolean = false,
     val deviceProfile: DeviceProfile = DeviceProfile.empty(),
     val installStates: Map<String, UpdateInstallState> = emptyMap(),
-    val storeHealth: Map<UpdateSource, StoreHealth> = emptyMap()
+    val storeHealth: Map<UpdateSource, StoreHealth> = emptyMap(),
+    /** A VPN is running, but UniStore itself is not routed through it. */
+    val vpnBypassed: Boolean = false
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -175,6 +179,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         // Settings must be shown as early as possible. Device detection runs
         // `getprop` and several package lookups, so keeping it on the same
         // coroutine used to delay the whole first frame after a cold start.
+        refreshNetworkProfile()
+
         viewModelScope.launch {
             settingsRepository.settings.collect { settings ->
                 container.iconLoader.setWeakDevice(settings.weakDevice)
@@ -207,7 +213,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 pruneUnavailableTracking()
                 requestTrackedSignatures()
                 maybeStartAutoCheck()
-                if (lastStoreHealthAt == 0L) refreshStoreHealth()
+                if (lastStoreHealthAt == 0L && checkJob?.isActive != true) {
+                    refreshStoreHealth()
+                }
             }
         }
 
@@ -478,8 +486,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         resumeBulkAfterResume()
+        refreshNetworkProfile()
         refreshStoreHealth()
         refreshInstalledApps(showLoading = false)
+    }
+
+    /**
+     * Keeps the request budget in sync with the current link and records
+     * whether a running VPN is bypassing UniStore. Android does not let one
+     * app join another app's VPN; the UI explains that checks are going
+     * through the regular network instead of pretending the tunnel is used.
+     */
+    private fun refreshNetworkProfile() {
+        val snapshot = container.networkMonitor.snapshot()
+        container.updateRepository.setMeteredNetwork(snapshot.metered)
+        _uiState.update { it.copy(vpnBypassed = snapshot.vpnBypassed) }
+        if (snapshot.vpnBypassed) {
+            Log.i(
+                "UpdateHub",
+                "VPN активен, но UniStore использует обычную сеть: " +
+                    "проверки идут напрямую"
+            )
+        }
     }
 
     /**
@@ -488,13 +516,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * never more than once a minute unless [force] is set.
      */
     fun refreshStoreHealth(force: Boolean = false) {
+        // Health probes are two HEAD requests per store. Running them while
+        // an update check is downloading Play pages made both slower and was
+        // the main reason a healthy mobile link looked broken.
+        if (checkJob?.isActive == true || _uiState.value.check.isChecking) return
         val now = System.currentTimeMillis()
         if (!force && now - lastStoreHealthAt < 60_000L) return
         if (storeHealthJob?.isActive == true) return
+        val sources = UpdateSource.fromKeys(_uiState.value.settings.enabledSources)
+        if (sources.isEmpty()) return
         lastStoreHealthAt = now
         storeHealthJob = viewModelScope.launch {
             val probed = runCatching {
-                container.updateRepository.probeStores(UpdateSource.entries)
+                container.updateRepository.probeStores(sources)
             }.getOrDefault(emptyMap())
             if (probed.isNotEmpty()) {
                 _uiState.update { it.copy(storeHealth = it.storeHealth + probed) }
@@ -1352,7 +1386,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         checkJob?.cancel()
+        // Free the link for the update pages; the indicator probes resume
+        // after the check instead of competing with them.
+        storeHealthJob?.cancel()
+        refreshNetworkProfile()
         checkJob = viewModelScope.launch {
+            // A full check takes about two minutes on LTE. Without a wake
+            // lock HyperOS suspends the process as soon as the screen turns
+            // off, and most store requests fail with UnknownHostException or
+            // "connection abort". Hold the CPU until the check finishes; the
+            // timeout is only a safety net if the coroutine is stuck.
+            val wakeLock = getApplication<Application>()
+                .getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, CHECK_WAKE_LOCK_TAG)
+                .apply {
+                    setReferenceCounted(false)
+                    acquire(CHECK_WAKE_LOCK_TIMEOUT_MS)
+                }
             val startedAt = System.currentTimeMillis()
             _uiState.update {
                 it.copy(
@@ -1436,12 +1486,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     errors > 0 -> showMessage("Не удалось проверить часть приложений")
                     else -> showMessage("Все приложения актуальны")
                 }
+
+                // Refresh the connection dots only after the last store page
+                // has finished. A short delay also lets the result list settle
+                // before the health requests start.
+                viewModelScope.launch {
+                    delay(1_200)
+                    refreshStoreHealth(force = true)
+                }
             } catch (cancelled: CancellationException) {
                 _uiState.update { it.copy(check = CheckUiState()) }
                 throw cancelled
             } catch (throwable: Throwable) {
                 _uiState.update { it.copy(check = CheckUiState()) }
                 showMessage("Ошибка проверки: ${throwable.message ?: "неизвестная ошибка"}")
+            } finally {
+                if (wakeLock.isHeld) wakeLock.release()
             }
         }
     }
@@ -1699,5 +1759,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** Downloaded bundles waiting for their system install window. */
         const val MAX_PREPARED_INSTALLS = 4
+
+        const val CHECK_WAKE_LOCK_TAG = "UniStore:update-check"
+        const val CHECK_WAKE_LOCK_TIMEOUT_MS = 6 * 60 * 1000L
     }
 }

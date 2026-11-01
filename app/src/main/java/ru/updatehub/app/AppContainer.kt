@@ -5,6 +5,7 @@ import android.os.Build
 import ru.updatehub.app.data.AppScanner
 import ru.updatehub.app.data.DeviceProfileDetector
 import ru.updatehub.app.data.IconLoader
+import ru.updatehub.app.data.NetworkMonitor
 import ru.updatehub.app.data.SettingsRepository
 import ru.updatehub.app.data.UpdateRepository
 import ru.updatehub.app.data.checkers.ApkPureChecker
@@ -21,11 +22,14 @@ import ru.updatehub.app.data.install.ApkInstaller
 import ru.updatehub.app.data.install.DirectApkResolver
 
 class AppContainer(context: Context) {
+    private val supportedAbis = Build.SUPPORTED_ABIS.toList()
+
     val settingsRepository = SettingsRepository(context)
     val appScanner = AppScanner(context)
     val iconLoader = IconLoader(context)
     val deviceProfileDetector = DeviceProfileDetector(context)
-    val directApkResolver = DirectApkResolver()
+    val networkMonitor = NetworkMonitor(context)
+    val directApkResolver = DirectApkResolver(supportedAbis)
     val apkDownloader = ApkDownloader(context)
     val apkInstaller = ApkInstaller(context)
 
@@ -36,7 +40,7 @@ class AppContainer(context: Context) {
             includeChineseCatalog = DeviceProfileDetector.isChineseMarket()
         ),
         GalaxyStoreChecker(),
-        ApkPureChecker(),
+        ApkPureChecker(deviceAbis = supportedAbis),
         FdroidChecker(),
         AptoideChecker(),
         VivoStoreChecker(),
@@ -47,6 +51,8 @@ class AppContainer(context: Context) {
         checkers = checkers,
         parallelism = if (DeviceProfileDetector.isLowRam(context)) 6 else 12,
         deviceSdk = Build.VERSION.SDK_INT,
-        supportedAbis = Build.SUPPORTED_ABIS.toList()
-    )
+        supportedAbis = supportedAbis
+    ).also { repository ->
+        repository.setMeteredNetwork(networkMonitor.snapshot().metered)
+    }
 }

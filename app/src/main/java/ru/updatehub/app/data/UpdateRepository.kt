@@ -9,10 +9,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import ru.updatehub.app.data.checkers.ApkPureChecker
 import ru.updatehub.app.data.checkers.CheckOutcome
+import ru.updatehub.app.data.checkers.GooglePlayChecker
 import ru.updatehub.app.data.checkers.Http
 import ru.updatehub.app.data.checkers.StoreChecker
 import ru.updatehub.app.data.checkers.VersionDetailsProvider
+import ru.updatehub.app.data.checkers.clearRouteMemory
 import ru.updatehub.app.data.install.metadataCompatibilityError
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -31,9 +34,52 @@ class UpdateRepository(
     @Volatile
     private var networkSemaphore = Semaphore(parallelism)
 
+    @Volatile
+    private var networkCapacity = parallelism
+
+    @Volatile
+    private var weakDevice = false
+
+    @Volatile
+    private var metered = false
+
     /** Reduces simultaneous store requests on weak devices. */
     fun setWeakDevice(enabled: Boolean) {
-        networkSemaphore = Semaphore(if (enabled) 6 else baselineParallelism)
+        if (weakDevice == enabled) return
+        weakDevice = enabled
+        applyNetworkProfile()
+    }
+
+    /**
+     * A cellular link has a much higher round-trip time and is shared by every
+     * request. Twelve parallel store pages made each one slower and pushed
+     * healthy Play responses past their route timeouts. Four slots keep the
+     * link busy without letting one large response starve all the others.
+     */
+    fun setMeteredNetwork(enabled: Boolean) {
+        if (metered == enabled) return
+        metered = enabled
+        applyNetworkProfile()
+        clearRouteMemory()
+        Http.resetNetworkState()
+        checkersBySource.values.forEach { checker ->
+            when (checker) {
+                is GooglePlayChecker -> checker.setMeteredNetwork(enabled)
+                is ApkPureChecker -> checker.setMeteredNetwork(enabled)
+                else -> Unit
+            }
+        }
+    }
+
+    private fun applyNetworkProfile() {
+        val capacity = when {
+            metered -> 4
+            weakDevice -> minOf(6, baselineParallelism)
+            else -> baselineParallelism
+        }
+        if (capacity == networkCapacity) return
+        networkCapacity = capacity
+        networkSemaphore = Semaphore(capacity)
     }
 
     suspend fun checkAll(
@@ -48,7 +94,10 @@ class UpdateRepository(
         val total = packages.size
         val done = AtomicInteger(0)
         val results = ConcurrentHashMap<String, AppUpdateResult>()
-        val health = SourceHealth()
+        val health = SourceHealth(
+            failureThreshold = if (metered) 2 else 3,
+            metered = metered
+        )
 
         // Every package starts immediately and queues its store requests on
         // the shared network semaphore. There is no small package-level gate,
@@ -332,7 +381,10 @@ class UpdateRepository(
         return outcome
     }
 
-    private class SourceHealth(private val failureThreshold: Int = 3) {
+    private class SourceHealth(
+        private val failureThreshold: Int = 3,
+        private val metered: Boolean = false
+    ) {
         private val consecutiveFailures = ConcurrentHashMap<UpdateSource, Int>()
         private val disabled = ConcurrentHashMap.newKeySet<UpdateSource>()
 
@@ -341,11 +393,15 @@ class UpdateRepository(
         /** Returns true when this outcome disabled the source. */
         fun record(source: UpdateSource, outcome: CheckOutcome): Boolean {
             if (outcome is CheckOutcome.Failed && outcome.transient) {
-                // Google Play goes through a VPN for many users and a few
-                // slow pages are normal. Give it more room than local stores
-                // before dropping it for the rest of the check.
+                // On Wi-Fi, Google Play pages are large and a few slow
+                // responses are normal. The compact data route is small and
+                // usually answers in one or two seconds, so even two isolated
+                // timeouts should not disable the whole source for the rest
+                // of the check. On a metered link the limit is four instead
+                // of the generic two; the old two-failure rule dropped Play
+                // for later apps after a single bad patch of LTE.
                 val threshold = if (source == UpdateSource.GOOGLE_PLAY) {
-                    failureThreshold + 2
+                    if (metered) 4 else failureThreshold + 2
                 } else {
                     failureThreshold
                 }
@@ -373,16 +429,16 @@ class UpdateRepository(
 
 /**
  * Upper bound for a single store lookup. Google Play pages are large (about
- * 200 KB compressed) and a VPN can be slow; 14 seconds often cut a healthy
- * page off in the middle. Other stores are small and fast.
+ * 200 KB compressed) and a mobile link can be slow; 14 seconds often cut a
+ * healthy page off in the middle. Other stores are small and fast.
  */
 internal fun sourceTimeoutMillis(source: UpdateSource): Long = when (source) {
-    UpdateSource.GOOGLE_PLAY -> 20_000L
-    // These sources try a direct route, alternate hosts and a translation
-    // proxy. The extra second keeps the outer timeout from cutting a healthy
-    // fallback off in the middle.
-    UpdateSource.APKPURE -> 12_000L
-    UpdateSource.RUSTORE -> 10_000L
-    UpdateSource.GETAPPS -> 11_000L
-    else -> 9_000L
+    UpdateSource.GOOGLE_PLAY -> 27_000L
+    // The API, the HTML page and two CDN filename routes each have their own
+    // short timeout. The outer bound only exists so a stalled socket cannot
+    // hold the source slot forever.
+    UpdateSource.APKPURE -> 22_000L
+    UpdateSource.RUSTORE -> 12_000L
+    UpdateSource.GETAPPS -> 12_000L
+    else -> 10_000L
 }

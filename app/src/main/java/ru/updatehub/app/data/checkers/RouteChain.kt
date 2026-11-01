@@ -7,6 +7,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * One way of reaching a store. Routes are tried in order until one of them
@@ -22,6 +23,8 @@ internal data class FetchRoute(
     val headers: Map<String, String> = emptyMap(),
     val timeoutMs: Long = 4_500L,
     val method: RouteMethod = RouteMethod.GET,
+    /** Form body for [RouteMethod.POST_FORM]. */
+    val body: String? = null,
     /** Uses the client with longer read timeouts (large store pages). */
     val slow: Boolean = false,
     /**
@@ -38,7 +41,7 @@ internal data class FetchRoute(
     val authoritative: Boolean = true
 )
 
-internal enum class RouteMethod { GET, HEAD }
+internal enum class RouteMethod { GET, HEAD, POST_FORM }
 
 internal sealed interface RouteReply<out T> {
     data class Found<T>(val value: T) : RouteReply<T>
@@ -78,8 +81,9 @@ internal suspend fun <T> tryRoutes(
     var lastError: String? = null
     var retryable = false
     var sawMissing = false
+    var sawFailure = false
 
-    for (route in routes) {
+    for (route in orderRoutes(routes)) {
         val elapsed = SystemClock.elapsedRealtime() - startedAt
         val remaining = budgetMs - elapsed
         if (remaining < 250L) break
@@ -90,6 +94,8 @@ internal suspend fun <T> tryRoutes(
                 parse(route, fetch(route))
             }
         } catch (e: TimeoutCancellationException) {
+            forgetRoute(route.name)
+            sawFailure = true
             lastError = "${route.name}: тайм-аут"
             Log.w(TAG, "${route.name}: тайм-аут ${timeout} мс")
             continue
@@ -99,10 +105,14 @@ internal suspend fun <T> tryRoutes(
             // failure: later routes must not run after cancellation.
             throw e
         } catch (e: IOException) {
+            forgetRoute(route.name)
+            sawFailure = true
             lastError = "${route.name}: ${e.friendlyMessage()}"
             Log.w(TAG, "$lastError (${e.javaClass.simpleName})")
             continue
         } catch (e: Exception) {
+            forgetRoute(route.name)
+            sawFailure = true
             lastError = "${route.name}: ${e.friendlyMessage()}"
             Log.w(TAG, "$lastError (${e.javaClass.simpleName})")
             continue
@@ -110,6 +120,7 @@ internal suspend fun <T> tryRoutes(
 
         when (reply) {
             is RouteReply.Found -> {
+                rememberRoute(route.name)
                 Log.d(TAG, "${route.name}: версия найдена")
                 return RouteResult.Found(reply.value)
             }
@@ -125,12 +136,14 @@ internal suspend fun <T> tryRoutes(
 
             is RouteReply.Failed -> {
                 if (reply.terminal) {
+                    forgetRoute(route.name)
                     Log.w(TAG, "${route.name}: ${reply.message}")
                     return RouteResult.Failed(
                         message = "${route.name}: ${reply.message}",
                         retryable = reply.retryable
                     )
                 }
+                forgetRoute(route.name)
                 retryable = retryable || reply.retryable
                 lastError = "${route.name}: ${reply.message}"
                 Log.w(TAG, lastError)
@@ -138,7 +151,7 @@ internal suspend fun <T> tryRoutes(
         }
     }
 
-    return if (sawMissing) {
+    return if (sawMissing && !sawFailure) {
         RouteResult.NotFound
     } else {
         RouteResult.Failed(
@@ -148,8 +161,63 @@ internal suspend fun <T> tryRoutes(
     }
 }
 
+/**
+ * Remembers which route answered last on this network. On a carrier that
+ * blocks Play's direct hostname, the first app still pays for the frontend
+ * timeout, but every following app starts with the route that actually
+ * worked instead of repeating the same dead end.
+ */
+private val routePreferences = ConcurrentHashMap<String, Long>()
+
+private const val ROUTE_MEMORY_MS = 4 * 60 * 1000L
+
+private fun orderRoutes(routes: List<FetchRoute>): List<FetchRoute> {
+    if (routes.size < 2) return routes
+
+    val now = SystemClock.elapsedRealtime()
+    var preferred: FetchRoute? = null
+    var latestExpiry = Long.MIN_VALUE
+    routes.forEach { route ->
+        val expires = routePreferences[route.name] ?: return@forEach
+        if (expires <= now) {
+            routePreferences.remove(route.name)
+            return@forEach
+        }
+        if (expires > latestExpiry) {
+            latestExpiry = expires
+            preferred = route
+        }
+    }
+    val first = preferred ?: return routes
+    return listOf(first) + routes.filterNot { it.name == first.name }
+}
+
+private fun rememberRoute(name: String) {
+    if (name.isBlank()) return
+    routePreferences[name] = SystemClock.elapsedRealtime() + ROUTE_MEMORY_MS
+}
+
+private fun forgetRoute(name: String) {
+    routePreferences.remove(name)
+}
+
+/** Clears learned route order after a Wi-Fi/cellular switch. */
+internal fun clearRouteMemory() {
+    routePreferences.clear()
+}
+
 private suspend fun fetch(route: FetchRoute): HttpResult = when {
     route.method == RouteMethod.HEAD -> Http.head(route.url, route.headers)
+    route.method == RouteMethod.POST_FORM -> {
+        val body = requireNotNull(route.body) {
+            "POST_FORM route ${route.name} has no body"
+        }
+        if (route.frontedHost != null) {
+            Http.postFormFronted(route.url, route.frontedHost, body, route.headers)
+        } else {
+            Http.postForm(route.url, body, route.headers)
+        }
+    }
     route.frontedHost != null ->
         Http.getFronted(route.url, route.frontedHost, route.headers)
     route.slow -> Http.getSlow(route.url, route.headers)

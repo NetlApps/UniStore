@@ -1,18 +1,49 @@
 package ru.updatehub.app.data.checkers
 
+import android.os.Build
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import ru.updatehub.app.data.UpdateSource
 import java.net.URLDecoder
+import java.util.concurrent.ConcurrentHashMap
 
-class ApkPureChecker : StoreChecker, VersionDetailsProvider {
+class ApkPureChecker(
+    private val deviceAbis: List<String> = emptyList()
+) : StoreChecker, VersionDetailsProvider {
     override val source: UpdateSource = UpdateSource.APKPURE
 
-    override suspend fun check(packageName: String): CheckOutcome {
+    private val releases = ConcurrentHashMap<String, CachedRelease>()
+
+    @Volatile
+    private var gate = Semaphore(4)
+
+    fun setMeteredNetwork(enabled: Boolean) {
+        gate = Semaphore(if (enabled) 2 else 4)
+    }
+
+    override suspend fun check(packageName: String): CheckOutcome = gate.withPermit {
         val detailUrl = "https://apkpure.com/-/$packageName"
         val routes = listOf(
+            // The JSON endpoint is not behind the Cloudflare browser challenge
+            // that regularly stalls the HTML page on mobile networks. It also
+            // returns versionCode and the signing certificate, so an update
+            // can be rejected before downloading a repackaged APK.
+            FetchRoute(
+                name = ApkPureApi.ROUTE_NAME,
+                url = ApkPureApi.url(packageName),
+                headers = ApkPureApi.headers(Build.VERSION.SDK_INT),
+                timeoutMs = 7_500L,
+                // An empty version_list can also mean a regional catalogue
+                // gap. Let the CDN filename routes confirm before reporting
+                // the package as absent.
+                authoritative = false
+            ),
             FetchRoute(
                 name = "APKPure",
                 url = detailUrl,
-                timeoutMs = 4_500L
+                timeoutMs = 7_000L
             ),
             // The download endpoint lives on a different CDN and is often
             // reachable from networks that block the HTML page. HEAD resolves
@@ -35,11 +66,11 @@ class ApkPureChecker : StoreChecker, VersionDetailsProvider {
             FetchRoute(
                 name = "APKPure translate",
                 url = translateUrl(detailUrl),
-                timeoutMs = 5_500L
+                timeoutMs = 6_000L
             )
         )
 
-        val result = tryRoutes(routes, budgetMs = 11_000L) { route, response ->
+        val result = tryRoutes(routes, budgetMs = 20_000L) { route, response ->
             when {
                 // Only the HTML page can answer "this app does not exist".
                 // A 404 from d.apkpure.com just means that this particular
@@ -51,6 +82,23 @@ class ApkPureChecker : StoreChecker, VersionDetailsProvider {
                     "HTTP ${response.code}",
                     retryable = response.code.isRetryableHttp()
                 )
+
+                route.name == ApkPureApi.ROUTE_NAME -> {
+                    when (val parsed = ApkPureApi.parse(response.body, deviceAbis)) {
+                        is ApkPureApiResult.Found -> {
+                            ApkPureApi.remember(packageName, deviceAbis, parsed.release)
+                            remember(packageName, parsed.release)
+                            RouteReply.Found(parsed.release.toOutcome())
+                        }
+
+                        ApkPureApiResult.Missing -> RouteReply.Missing
+
+                        is ApkPureApiResult.Failed -> RouteReply.Failed(
+                            parsed.message,
+                            retryable = parsed.retryable
+                        )
+                    }
+                }
 
                 route.method == RouteMethod.HEAD -> {
                     val version = versionFromApkPureUrl(response.finalUrl)
@@ -74,7 +122,7 @@ class ApkPureChecker : StoreChecker, VersionDetailsProvider {
             }
         }
 
-        return when (result) {
+        return@withPermit when (result) {
             is RouteResult.Found -> result.value
             RouteResult.NotFound -> CheckOutcome.NotFound
             is RouteResult.Failed -> CheckOutcome.Failed(
@@ -91,6 +139,24 @@ class ApkPureChecker : StoreChecker, VersionDetailsProvider {
      * requested for versions that look like real updates.
      */
     override suspend fun details(packageName: String): VersionDetails? {
+        cached(packageName)?.let { return it.details }
+
+        // The JSON response already contains ABI, minSdk and bundle type.
+        // Reusing the release cached by check() avoids a second page request
+        // for every app that has an update. A short bound keeps a blocked API
+        // from holding each details request for the full HTTP timeout.
+        val release = try {
+            withTimeoutOrNull(6_000L) { ApkPureApi.latest(packageName, deviceAbis) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        if (release != null) {
+            remember(packageName, release)
+            return release.details
+        }
+
         val downloadUrl = "https://apkpure.com/-/$packageName/download"
         val result = tryRoutes(
             routes = listOf(
@@ -116,6 +182,28 @@ class ApkPureChecker : StoreChecker, VersionDetailsProvider {
             }
         }
         return (result as? RouteResult.Found)?.value
+    }
+
+    private fun remember(packageName: String, release: ApkPureRelease) {
+        releases[packageName] = CachedRelease(release, System.currentTimeMillis())
+    }
+
+    private fun cached(packageName: String): ApkPureRelease? {
+        val cached = releases[packageName] ?: return null
+        if (System.currentTimeMillis() - cached.at > CACHE_TTL_MS) {
+            releases.remove(packageName, cached)
+            return null
+        }
+        return cached.release
+    }
+
+    private data class CachedRelease(
+        val release: ApkPureRelease,
+        val at: Long
+    )
+
+    private companion object {
+        const val CACHE_TTL_MS = 2 * 60 * 1000L
     }
 }
 

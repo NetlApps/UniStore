@@ -118,7 +118,7 @@
           <svg class="icon icon-external" aria-hidden="true"><use href="#i-external"/></svg>
           <span class="sr-only">(откроется в новой вкладке)</span>
         </a>
-        <a class="btn btn-primary btn-sm" href="https://github.com/NetlApps/UniStore/releases/download/v1.1.7/UniStore-1.1.7.apk">
+        <a class="btn btn-primary btn-sm" href="https://github.com/NetlApps/UniStore/releases/download/v1.1.8/UniStore-1.1.8.apk">
           <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
           Скачать
         </a>
@@ -140,10 +140,10 @@
           <p class="lead">UniStore проверяет Google Play, RuStore, APKPure, F-Droid, Aptoide и магазины производителей. Показывает только совместимые версии, проверяет подпись APK и передаёт файл системному установщику.</p>
 
           <div class="hero-actions">
-            <a class="btn btn-primary btn-lg" href="https://github.com/NetlApps/UniStore/releases/download/v1.1.7/UniStore-1.1.7.apk">
+            <a class="btn btn-primary btn-lg" href="https://github.com/NetlApps/UniStore/releases/download/v1.1.8/UniStore-1.1.8.apk">
               <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
               Скачать APK
-              <span class="btn-note">1.1.7 · ~2 МБ</span>
+              <span class="btn-note">1.1.8 · ~2 МБ</span>
             </a>
             <a class="btn btn-secondary btn-lg" href="https://github.com/NetlApps/UniStore" target="_blank" rel="noopener">
               <svg class="icon" aria-hidden="true"><use href="#i-github"/></svg>
@@ -190,7 +190,7 @@
           </div>
           <div class="stat">
             <dt>unit-тестов</dt>
-            <dd>86</dd>
+            <dd>102</dd>
           </div>
           <div class="stat">
             <dt>рекламных SDK</dt>
@@ -335,12 +335,12 @@
           <div class="install-main">
             <p class="section-label">Установка</p>
             <h2>Скачайте APK и обновите приложения</h2>
-            <p class="install-lead">Версия <strong>1.1.7</strong> · Android 8.0+ · около 2 МБ. Для прямой установки разрешите UniStore установку из неизвестных источников.</p>
+            <p class="install-lead">Версия <strong>1.1.8</strong> · Android 8.0+ · около 2 МБ. Для прямой установки разрешите UniStore установку из неизвестных источников.</p>
 
             <div class="install-actions">
-              <a class="btn btn-primary btn-lg" href="https://github.com/NetlApps/UniStore/releases/download/v1.1.7/UniStore-1.1.7.apk">
+              <a class="btn btn-primary btn-lg" href="https://github.com/NetlApps/UniStore/releases/download/v1.1.8/UniStore-1.1.8.apk">
                 <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
-                Скачать UniStore-1.1.7.apk
+                Скачать UniStore-1.1.8.apk
               </a>
               <a class="btn btn-secondary" href="https://github.com/NetlApps/UniStore/releases/latest" target="_blank" rel="noopener">
                 Все релизы
@@ -352,13 +352,13 @@
             <div class="checksum">
               <div class="checksum-head">
                 <span>SHA-256</span>
-                <button class="copy-button" type="button" data-copy="905C278640E139CBAABACC68C9E28260858C58867B127B2235D277B47D5C7F4E" aria-label="Скопировать SHA-256">
+                <button class="copy-button" type="button" data-copy="14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C" aria-label="Скопировать SHA-256">
                   <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>
                   <span class="copy-label">Копировать</span>
                 </button>
               </div>
-              <code>905C278640E139CBAABACC68C9E28260858C58867B127B2235D277B47D5C7F4E</code>
-              <p>Размер: 2 054 303 байт. Сверьте хеш после скачивания.</p>
+              <code>14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C</code>
+              <p>Размер: 2 070 683 байт. Сверьте хеш после скачивания.</p>
             </div>
           </div>
 
@@ -410,7 +410,7 @@
         <div class="faq-list reveal">
           <details>
             <summary>Почему Google Play иногда показывается как «недоступен»?</summary>
-            <p>Google Play не отдаёт версии через публичный API, поэтому UniStore читает страницу приложения. В России она часто открывается только через VPN. Если VPN работает в режиме split tunneling, добавьте UniStore в список приложений, которые идут через туннель.</p>
+            <p>Google Play не отдаёт версии через публичный API, поэтому UniStore читает страницу приложения. Сначала запрос идёт через <code>www.google.com</code> с подменой <code>Host</code>, затем напрямую и через резервные маршруты; DNS при сбое оператора разрешается через DNS-over-HTTPS. VPN для этого не требуется. Красный кружок означает, что конкретный маршрут не ответил; повторите проверку позже.</p>
           </details>
           <details>
             <summary>Почему обновление не устанавливается автоматически?</summary>
@@ -461,7 +461,7 @@
           </div>
           <ul class="community-stats">
             <li><span class="status-dot"></span><span><strong>CI</strong> проходит</span></li>
-            <li><span class="status-dot"></span><span><strong>86</strong> unit-тестов</span></li>
+            <li><span class="status-dot"></span><span><strong>102</strong> unit-тестов</span></li>
             <li><span class="status-dot"></span><span><strong>Apache 2.0</strong></span></li>
             <li><span class="status-dot"></span><span><strong>Без</strong> трекеров</span></li>
           </ul>

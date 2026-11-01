@@ -9,19 +9,19 @@
   [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](#требования)
   [![Kotlin 2.0](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&logoColor=white)](#технологии)
   [![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)](#технологии)
-  [![Release](https://img.shields.io/badge/release-1.1.7-6366F1)](../../releases/latest)
+  [![Release](https://img.shields.io/badge/release-1.1.8-6366F1)](../../releases/latest)
   [![APK](https://img.shields.io/badge/APK-~2%20MB-22C55E)](#установка)
-  [![Tests](https://img.shields.io/badge/tests-86%20passed-16A34A)](#качество-и-проверка)
+  [![Tests](https://img.shields.io/badge/tests-102%20passed-16A34A)](#качество-и-проверка)
   [![CI](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml/badge.svg)](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml)
 </div>
 
-> **Сайт:** [netlapps.github.io/UniStore](https://netlapps.github.io/UniStore/) · **Статус:** активная разработка. Последний релиз — **1.1.7** (versionCode 11). Приложение проверено на Xiaomi `2511FPC34G` (Android 16, HyperOS 3).
+> **Сайт:** [netlapps.github.io/UniStore](https://netlapps.github.io/UniStore/) · **Статус:** активная разработка. Последний релиз — **1.1.8** (versionCode 12). Версия проверена на Xiaomi `2511FPC34G` (Android 16, HyperOS 3): Wi‑Fi — 18 с, LTE без VPN — 106 с на 79 приложениях; APK APKPure скачан, подпись проверена, установка подтверждена системным установщиком.
 >
 > **Язык:** Русский · [English](#english)
 
 **UniStore** — Android-приложение на Kotlin и Jetpack Compose, которое собирает обновления установленных приложений из нескольких магазинов и показывает их в одном списке. Это не магазин и не замена Google Play: UniStore находит версии, сравнивает их с установленными, проверяет совместимость и подпись, скачивает APK/XAPK и передаёт файл системному установщику Android.
 
-Проект вырос из практической задачи: в России Google Play часто доступен только через VPN, а обновления раскиданы по RuStore, APKPure, F-Droid, Aptoide и фирменным каталогам производителей. UniStore собирает всё в одном месте и не требует root.
+Проект вырос из практической задачи: в России доступ к Google Play нестабилен, а обновления раскиданы по RuStore, APKPure, F-Droid, Aptoide и фирменным каталогам производителей. UniStore собирает всё в одном месте, сам обходит часть сетевых ограничений и не требует root.
 
 Интерфейс полностью на русском. Есть четыре темы, семь цветовых схем, адаптивная Material You, сезонное оформление и отдельный режим для слабых устройств.
 
@@ -133,6 +133,18 @@ UniStore следит за приложениями, которые вы доб�
 
 ## Последние обновления
 
+### 1.1.8 — меньше зависимости от VPN
+
+- Автоматический резервный DNS-over-HTTPS через Cloudflare и Google, если операторский DNS не отвечает или подменяет адреса. Настройка не нужна.
+- Google Play проверяется через компактный RPC `batchexecute` (`Ws7gDc`): около 15 КБ вместо страницы на 1,2 МБ. Запрос идёт через `www.google.com` и `www.google.co.uk` с подменой `Host`, затем напрямую; рабочий маршрут запоминается.
+- Если Play отвечает `null`, приложение считается отсутствующим в региональном каталоге, а не сетевым сбоем. На LTE тяжёлая страница не скачивается: вместо неё повторяется компактный запрос.
+- APKPure проверяется через JSON API: версия, versionCode, SHA-1 подписи, ABI и minSdk приходят без прохождения Cloudflare-страницы. Варианты ChromeOS (`CrOS`) отбрасываются и не создают ложных обновлений.
+- APK/XAPK APKPure скачивается по прямой подписанной ссылке `data.winudf.com`; WebView остаётся только резервом.
+- На мобильном интернете работают 4 общих слота и 2 слота APKPure. При ручной проверке удерживается wake lock, чтобы HyperOS не приостанавливал сеть после выключения экрана.
+- Если часть параллельной загрузки оборвалась, повторяется только эта часть, а не весь APK. На слабом соединении это экономит трафик и время.
+- Индикаторы связи не запускаются во время проверки и не создают лишнюю нагрузку на канал.
+- Если VPN нет, приложение больше не советует его включить: красный кружок означает сетевое ограничение, а не требование VPN.
+
 ### 1.1.7 — переходы из точки нажатия и осколки «U»
 
 - Шестерёнка, кнопка «Добавить», «Настроить», чипы источников, hero-кнопка, пустые состояния и «Начать» запоминают свой реальный центр при компоновке.
@@ -182,7 +194,7 @@ UniStore следит за приложениями, которые вы доб�
 
 ### Шаги
 
-1. Скачайте `UniStore-1.1.7.apk` из [Releases](../../releases/latest) или возьмите файл `UniStore-1.1.7.apk` из корня репозитория.
+1. Скачайте `UniStore-1.1.8.apk` из [Releases](../../releases/latest) или возьмите файл `UniStore-1.1.8.apk` из корня репозитория.
 2. Откройте APK и разрешите установку из этого источника, если Android попросит.
 3. При первом запуске выберите источники и нажмите «Начать».
 4. Добавьте приложения и нажмите «Проверить».
@@ -191,15 +203,15 @@ UniStore следит за приложениями, которые вы доб�
 ### Контрольная сумма
 
 ```text
-Файл:    UniStore-1.1.7.apk
-Размер:  2 054 303 байт
-SHA-256: 905C278640E139CBAABACC68C9E28260858C58867B127B2235D277B47D5C7F4E
+Файл:    UniStore-1.1.8.apk
+Размер:  2 070 683 байт
+SHA-256: 14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C
 ```
 
 Проверка в Windows:
 
 ```powershell
-Get-FileHash .\UniStore-1.1.7.apk -Algorithm SHA256
+Get-FileHash .\UniStore-1.1.8.apk -Algorithm SHA256
 ```
 
 ## Сборка
@@ -300,21 +312,21 @@ Compose UI → ApkDownloader → ApkArchiveInspector → ApkInstaller → Packag
 
 | Проверка | Результат |
 |---|---|
-| Unit-тесты | **86/86** |
+| Unit-тесты | **102/102** |
 | Lint | **0 ошибок**, 19 предупреждений |
-| Release APK | **2 054 303 байт** |
-| SHA-256 | `905C278640E139CBAABACC68C9E28260858C58867B127B2235D277B47D5C7F4E` |
+| Release APK | **2 070 683 байт** |
+| SHA-256 | `14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C` |
 | Тестовое устройство | Xiaomi `2511FPC34G`, Android 16, HyperOS 3 |
 | Приложений под наблюдением | 79 |
 | Системные верификаторы | Скрыты |
-| VPN | подключён |
+| Сеть | Wi‑Fi и LTE |
 
-Тесты покрывают сравнение версий, правила обновлений, сезонные даты, проверку подписей, совместимость Android/ABI, чтение split-APK, HTTP Range, маршруты источников и определение системных приложений.
+Тесты покрывают сравнение версий, правила обновлений, сезонные даты, проверку подписей, совместимость Android/ABI, чтение split-APK, HTTP Range, маршруты источников, DNS-over-HTTPS, JSON APKPure, фильтрацию ChromeOS-вариантов и определение системных приложений.
 
 ## Ограничения
 
 - Приложение не устанавливает APK молча: установку подтверждает пользователь в системном окне.
-- Google Play не имеет публичного API версий, поэтому страница разбирается как HTML. В России она часто доступна только через VPN.
+- Google Play не имеет публичного API версий. UniStore использует компактный RPC `batchexecute`, который отдаёт те же данные, что и страница, но примерно в 80 раз меньше. Запросы идут через `www.google.com` и `www.google.co.uk`, затем напрямую; при необходимости подключается резервный DNS-over-HTTPS. Если оператор блокирует все маршруты, источник может остаться недоступным.
 - Магазины без публичного API (AppGallery, Honor, HeyTap, Palm, Amazon, Lenovo, ZTE) проверяются только вручную.
 - Значение «Varies with device» в Google Play считается отсутствием версии.
 - Aptoide иногда содержит сторонние загрузки с чужой подписью — такие APK блокируются до установщика.
@@ -326,7 +338,7 @@ Compose UI → ApkDownloader → ApkArchiveInspector → ApkInstaller → Packag
 <details>
 <summary><strong>Почему Google Play иногда показывается как «недоступен»?</strong></summary>
 
-Google Play не отдаёт версии через публичный API, поэтому UniStore читает страницу приложения. В России она часто открывается только через VPN. Если VPN работает в режиме split tunneling, добавьте UniStore в список приложений, которые идут через туннель. Красный кружок и подсказка «проверьте VPN» означают сетевое ограничение, а не ошибку приложения.
+Google Play не отдаёт версии через публичный API, поэтому UniStore запрашивает компактный RPC `batchexecute` — те же данные, что и на странице, но около 15 КБ. Запрос идёт через `www.google.com` с подменой `Host`, затем через `www.google.co.uk` и напрямую; DNS при сбое оператора разрешается через DNS-over-HTTPS. VPN для этого не требуется. Красный кружок означает, что конкретный маршрут не ответил; нажмите «Проверить снова» позже. Если вы уже используете VPN с раздельным туннелированием и хотите, чтобы UniStore шёл через него, добавьте приложение в список разрешённых в VPN — но это необязательно.
 
 </details>
 
@@ -373,16 +385,16 @@ The app UI and the rest of this README are currently in Russian; this section is
 - **Privacy:** no ads, accounts, analytics or telemetry. Settings and the tracked app list stay on the device.
 - **Small and fast:** Android 8.0+, release APK about 2 MB, parallel checks and a low-end device mode.
 - **Russian UI:** Material 3, four themes, seven color schemes and seasonal effects.
-- **Quality:** 86 unit tests and a green CI workflow.
+- **Quality:** 102 unit tests and a green CI workflow.
 
 ### Install
 
-1. Download [UniStore-1.1.7.apk](https://github.com/NetlApps/UniStore/releases/download/v1.1.7/UniStore-1.1.7.apk).
+1. Download [UniStore-1.1.8.apk](https://github.com/NetlApps/UniStore/releases/download/v1.1.8/UniStore-1.1.8.apk).
 2. Open the file and allow installs from this source if Android asks.
 3. On first launch, choose stores, add apps and tap **«Проверить»** (Check).
 4. Confirm each update in the standard Android installer.
 
-SHA-256: `905C278640E139CBAABACC68C9E28260858C58867B127B2235D277B47D5C7F4E`
+SHA-256: `14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C`
 
 ### Links
 
