@@ -15,7 +15,7 @@
   [![CI](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml/badge.svg)](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml)
 </div>
 
-> **Статус:** активная разработка. Последний релиз — **1.1.7** (versionCode 11). Приложение проверено на Xiaomi `2511FPC34G` (Android 16, HyperOS 3).
+> **Сайт:** [netlapps.github.io/UniStore](https://netlapps.github.io/UniStore/) · **Статус:** активная разработка. Последний релиз — **1.1.7** (versionCode 11). Приложение проверено на Xiaomi `2511FPC34G` (Android 16, HyperOS 3).
 
 **UniStore** — Android-приложение на Kotlin и Jetpack Compose, которое собирает обновления установленных приложений из нескольких магазинов и показывает их в одном списке. Это не магазин и не замена Google Play: UniStore находит версии, сравнивает их с установленными, проверяет совместимость и подпись, скачивает APK/XAPK и передаёт файл системному установщику Android.
 
