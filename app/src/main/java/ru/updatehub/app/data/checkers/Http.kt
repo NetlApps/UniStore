@@ -2,6 +2,10 @@ package ru.updatehub.app.data.checkers
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -97,6 +101,29 @@ object Http {
     fun resetNetworkState() {
         dns.clear()
         client.connectionPool.evictAll()
+    }
+
+    /**
+     * Resolves store hostnames before the first check request needs them.
+     * The resolver caches answers, and doing the lookups in parallel turns a
+     * slow carrier resolver into one timeout instead of one per source.
+     */
+    suspend fun prewarm(hosts: Collection<String>) {
+        if (hosts.isEmpty()) return
+        coroutineScope {
+            hosts.distinct().map { host ->
+                async(Dispatchers.IO) {
+                    try {
+                        dns.lookup(host)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // A host that cannot be resolved is handled by the
+                        // checker routes with their normal error path.
+                    }
+                }
+            }.awaitAll()
+        }
     }
 
     /**

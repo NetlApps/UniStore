@@ -1,5 +1,6 @@
 package ru.updatehub.app.data.checkers
 
+import ru.updatehub.app.data.DeviceProfileDetector
 import ru.updatehub.app.data.UpdateSource
 
 /**
@@ -18,18 +19,16 @@ class GetAppsChecker(
      * Chinese Subway Surfers build 7.x next to the global 3.x build). They are
      * only useful on Chinese firmware; on a global ROM they produce updates
      * that the installed GetApps cannot deliver.
+     *
+     * The value is resolved lazily: reading the MIUI region spawns `getprop`,
+     * and doing that in Application.onCreate delayed the first frame for a
+     * flag that only a check needs.
      */
-    private val includeChineseCatalog: Boolean = true
+    chineseCatalog: () -> Boolean = { DeviceProfileDetector.isChineseMarket() }
 ) : StoreChecker {
     override val source: UpdateSource = UpdateSource.GETAPPS
 
-    init {
-        android.util.Log.d(
-            "UpdateHub",
-            "GetApps: китайский каталог " +
-                if (includeChineseCatalog) "включён" else "отключён"
-        )
-    }
+    private val includeChineseCatalog: Boolean by lazy(chineseCatalog)
 
     override suspend fun check(packageName: String): CheckOutcome {
         val globalUrl = "https://global.app.mi.com/details?id=$packageName"

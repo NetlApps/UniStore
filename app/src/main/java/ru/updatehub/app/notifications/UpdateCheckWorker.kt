@@ -26,6 +26,14 @@ class UpdateCheckWorker(
             val sources = UpdateSource.fromKeys(settings.enabledSources).toSet()
             if (sources.isEmpty()) return Result.success()
 
+            // Background checks used to run with the Wi-Fi concurrency profile
+            // on LTE as well, which caused mass timeouts on slow carriers.
+            // Apply the same link profile as the foreground check.
+            container.updateRepository.setWeakDevice(settings.weakDevice)
+            container.updateRepository.setMeteredNetwork(
+                container.networkMonitor.snapshot().metered
+            )
+
             val installed = container.appScanner.scan(includeSystem = true)
                 .associateBy { it.packageName }
             val packages = if (settings.checkSystemApps) {

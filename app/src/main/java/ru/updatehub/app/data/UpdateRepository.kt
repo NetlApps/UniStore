@@ -2,18 +2,23 @@ package ru.updatehub.app.data
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import ru.updatehub.app.data.checkers.ApkPureChecker
 import ru.updatehub.app.data.checkers.CheckOutcome
 import ru.updatehub.app.data.checkers.GooglePlayChecker
 import ru.updatehub.app.data.checkers.Http
+import ru.updatehub.app.data.checkers.NetworkSlot
 import ru.updatehub.app.data.checkers.StoreChecker
+import ru.updatehub.app.data.checkers.StorePrefetcher
 import ru.updatehub.app.data.checkers.VersionDetailsProvider
 import ru.updatehub.app.data.checkers.clearRouteMemory
 import ru.updatehub.app.data.install.metadataCompatibilityError
@@ -42,6 +47,15 @@ class UpdateRepository(
 
     @Volatile
     private var metered = false
+
+    /**
+     * Lets a prefetcher borrow the same slots as normal per-app checks, so a
+     * grouped request cannot push the link above its concurrency profile.
+     */
+    private val networkSlot = object : NetworkSlot {
+        override suspend fun <T> withSlot(block: suspend () -> T): T =
+            networkSemaphore.withPermit { block() }
+    }
 
     /** Reduces simultaneous store requests on weak devices. */
     fun setWeakDevice(enabled: Boolean) {
@@ -99,6 +113,48 @@ class UpdateRepository(
             metered = metered
         )
 
+        // Play can resolve ten packages in one RPC, the same idea as
+        // Obtainium's source prefetch. Per-app Play checks wait for their
+        // batch entry instead of sending a duplicate request; other sources
+        // keep running while the batch is in flight.
+        val prefetchSources = orderedSources
+            .filter { checkersBySource[it] is StorePrefetcher }
+            .toSet()
+        val prefetchers = prefetchSources
+            .mapNotNull { checkersBySource[it] as? StorePrefetcher }
+        // A result cached by the repository is returned before the checker
+        // runs, so those packages do not need a batch request at all.
+        val cacheNow = System.currentTimeMillis()
+        val prefetchTargets = if (prefetchers.isEmpty()) {
+            emptyList()
+        } else {
+            packages.filter { packageName ->
+                prefetchSources.any { source ->
+                    val cached = cache["${source.key}|$packageName"]
+                    cached == null || cacheNow - cached.timestamp >= cacheTtlMs
+                }
+            }
+        }
+        val prefetchJob = if (prefetchTargets.size >= 3) {
+            // UNDISPATCHED runs the registration part of prefetch before the
+            // first app check starts. Otherwise both paths could send a
+            // request for the same package on a fast Wi-Fi link.
+            launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+                prefetchers.forEach { prefetcher ->
+                    prefetcher.prefetch(prefetchTargets, networkSlot)
+                }
+            }
+        } else {
+            null
+        }
+
+        // Resolve every store host once, in parallel. On a carrier with a
+        // broken resolver this moves the 1.5 s system-DNS timeout off the
+        // critical path of the first request to each source.
+        val warmupJob = launch(Dispatchers.IO) {
+            Http.prewarm(orderedSources.flatMap(::sourceCheckHosts))
+        }
+
         // Every package starts immediately and queues its store requests on
         // the shared network semaphore. There is no small package-level gate,
         // so a slow Google Play request for the first few apps no longer holds
@@ -125,6 +181,8 @@ class UpdateRepository(
             }
         }.awaitAll()
 
+        prefetchJob?.cancel()
+        warmupJob.cancel()
         results.toMap()
     }
 
@@ -350,6 +408,27 @@ class UpdateRepository(
         val checker = checkersBySource[source]
             ?: return CheckOutcome.Failed("Источник недоступен", transient = true)
 
+        // A grouped source request may already be fetching this package for
+        // the whole list. Wait for it outside the network slot: if these
+        // checks held all slots while waiting, the prefetch itself could never
+        // get one. A null answer means "not prefetched", so the normal route
+        // below still works.
+        if (checker is StorePrefetcher) {
+            checker.awaitPrefetched(packageName, PREFETCH_WAIT_MS)?.let { outcome ->
+                if (outcome is CheckOutcome.Found) {
+                    cache[key] = CachedOutcome(outcome, System.currentTimeMillis())
+                }
+                if (health.record(source, outcome)) {
+                    Log.i(
+                        TAG,
+                        "Источник ${source.key} отключён до конца проверки после сетевых ошибок"
+                    )
+                    onSourceUnavailable(source)
+                }
+                return outcome
+            }
+        }
+
         val outcome = networkSemaphore.withPermit {
             if (health.isDisabled(source)) {
                 CheckOutcome.Failed("Источник временно недоступен", transient = true)
@@ -421,8 +500,35 @@ class UpdateRepository(
         val timestamp: Long
     )
 
+    /**
+     * Hosts whose DNS answers a full check needs. The health URL covers the
+     * main store host; API and CDN hosts are listed explicitly so the warmup
+     * also helps the first API request.
+     */
+    private fun sourceCheckHosts(source: UpdateSource): List<String> = buildList {
+        source.healthUrl.toHttpUrlOrNull()?.host?.let(::add)
+        when (source) {
+            UpdateSource.GOOGLE_PLAY -> addAll(
+                listOf("www.google.com", "www.google.co.uk", "play.google.com")
+            )
+
+            UpdateSource.APKPURE -> add("tapi.pureapk.com")
+            UpdateSource.RUSTORE -> add("backapi.rustore.ru")
+            UpdateSource.GETAPPS -> add("app.mi.com")
+            UpdateSource.FDROID -> add("f-droid.org")
+            else -> Unit
+        }
+    }
+
     private companion object {
         const val PROBE_TIMEOUT_MS = 12_000L
+
+        /**
+         * Slightly longer than the Play prefetch budget. The deferred entries
+         * are completed in a finally block even on timeout, so this is only a
+         * safety net against a stuck coroutine.
+         */
+        const val PREFETCH_WAIT_MS = 21_000L
         const val TAG = "UpdateRepository"
     }
 }

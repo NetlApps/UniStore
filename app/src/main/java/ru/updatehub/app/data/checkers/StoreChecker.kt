@@ -30,6 +30,40 @@ interface StoreChecker {
 }
 
 /**
+ * A source that can resolve several packages in one request.
+ *
+ * Obtainium uses the same approach (`prefetchUpdateInfo`): a check of dozens
+ * of apps should pay for one request per source group, not one request per
+ * app. Fewer round trips matter most on a mobile link, where every new
+ * request competes for the same four connection slots.
+ */
+interface StorePrefetcher {
+    /**
+     * Fills the per-package cache. A failure is not fatal: every package that
+     * was not cached is checked individually by [StoreChecker.check].
+     *
+     * [networkSlot] runs one request under the repository's concurrency limit,
+     * so a prefetch can never take more slots than a normal check.
+     */
+    suspend fun prefetch(packages: Collection<String>, networkSlot: NetworkSlot)
+
+    /**
+     * Waits for the prefetch result of [packageName] at most [timeoutMs].
+     *
+     * A null result means the package is not part of a running prefetch or
+     * the batch did not return a usable card; the caller then falls back to
+     * the normal per-app check. Waiting happens outside the network slot, so
+     * queued checks cannot starve the batch request that they are waiting for.
+     */
+    suspend fun awaitPrefetched(packageName: String, timeoutMs: Long): CheckOutcome?
+}
+
+/** Lets a checker borrow a shared network slot without knowing the repository. */
+interface NetworkSlot {
+    suspend fun <T> withSlot(block: suspend () -> T): T
+}
+
+/**
  * Extra metadata that some stores publish on the download page. It lets
  * UniStore reject a version before downloading when its native code or Android
  * requirement cannot work on this phone.

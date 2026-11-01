@@ -37,7 +37,7 @@ class AppContainer(context: Context) {
         GooglePlayChecker(),
         RuStoreChecker(),
         GetAppsChecker(
-            includeChineseCatalog = DeviceProfileDetector.isChineseMarket()
+            chineseCatalog = DeviceProfileDetector::isChineseMarket
         ),
         GalaxyStoreChecker(),
         ApkPureChecker(deviceAbis = supportedAbis),

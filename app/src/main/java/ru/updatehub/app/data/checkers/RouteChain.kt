@@ -144,6 +144,7 @@ internal suspend fun <T> tryRoutes(
                     )
                 }
                 forgetRoute(route.name)
+                if (reply.retryable) coolDownRoute(route.name)
                 retryable = retryable || reply.retryable
                 lastError = "${route.name}: ${reply.message}"
                 Log.w(TAG, lastError)
@@ -169,15 +170,37 @@ internal suspend fun <T> tryRoutes(
  */
 private val routePreferences = ConcurrentHashMap<String, Long>()
 
+/**
+ * Routes that recently answered 429/5xx. Repeating a rate-limited or broken
+ * route for every app in a check is what turns one bad response into minutes
+ * of timeouts; Obtainium applies the same per-host pause. The block is short
+ * so a route recovers quickly on the next check.
+ */
+private val blockedUntil = ConcurrentHashMap<String, Long>()
+
 private const val ROUTE_MEMORY_MS = 4 * 60 * 1000L
+private const val ROUTE_COOLDOWN_MS = 60 * 1000L
 
 private fun orderRoutes(routes: List<FetchRoute>): List<FetchRoute> {
     if (routes.size < 2) return routes
 
     val now = SystemClock.elapsedRealtime()
+    val available = routes.filter { route ->
+        val until = blockedUntil[route.name] ?: return@filter true
+        if (until <= now) {
+            blockedUntil.remove(route.name)
+            true
+        } else {
+            false
+        }
+    }
+    // If every route is cooling down, keep the normal chain instead of
+    // failing the app without trying.
+    if (available.isEmpty()) return routes
+
     var preferred: FetchRoute? = null
     var latestExpiry = Long.MIN_VALUE
-    routes.forEach { route ->
+    available.forEach { route ->
         val expires = routePreferences[route.name] ?: return@forEach
         if (expires <= now) {
             routePreferences.remove(route.name)
@@ -188,8 +211,8 @@ private fun orderRoutes(routes: List<FetchRoute>): List<FetchRoute> {
             preferred = route
         }
     }
-    val first = preferred ?: return routes
-    return listOf(first) + routes.filterNot { it.name == first.name }
+    val first = preferred ?: return available
+    return listOf(first) + available.filterNot { it.name == first.name }
 }
 
 private fun rememberRoute(name: String) {
@@ -201,9 +224,15 @@ private fun forgetRoute(name: String) {
     routePreferences.remove(name)
 }
 
+private fun coolDownRoute(name: String) {
+    if (name.isBlank()) return
+    blockedUntil[name] = SystemClock.elapsedRealtime() + ROUTE_COOLDOWN_MS
+}
+
 /** Clears learned route order after a Wi-Fi/cellular switch. */
 internal fun clearRouteMemory() {
     routePreferences.clear()
+    blockedUntil.clear()
 }
 
 private suspend fun fetch(route: FetchRoute): HttpResult = when {

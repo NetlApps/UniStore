@@ -80,13 +80,45 @@ class DeviceProfileDetector(private val context: Context) {
                 !Build.PRODUCT.contains("global", ignoreCase = true)
         }
 
-        private fun systemProperty(name: String): String = runCatching {
-            val process = ProcessBuilder("/system/bin/getprop", name)
+        private fun systemProperty(name: String): String =
+            systemProperties()[name].orEmpty()
+
+        /**
+         * Reads the whole property list once per process. `getprop` is a
+         * process spawn; asking it for one key at a time during startup cost
+         * more than loading the settings, and the same values are needed by
+         * the device card and the GetApps catalogue choice.
+         */
+        @Synchronized
+        private fun systemProperties(): Map<String, String> {
+            propertiesCache?.let { return it }
+            return readSystemProperties().also { propertiesCache = it }
+        }
+
+        @Volatile
+        private var propertiesCache: Map<String, String>? = null
+
+        private fun readSystemProperties(): Map<String, String> = runCatching {
+            val process = ProcessBuilder("/system/bin/getprop")
                 .redirectErrorStream(true)
                 .start()
-            process.inputStream.bufferedReader().use { it.readText().trim() }
-                .also { process.waitFor() }
-        }.getOrDefault("")
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            process.waitFor()
+            output.lineSequence().mapNotNull { line ->
+                val keyStart = line.indexOf('[')
+                val keyEnd = line.indexOf(']', keyStart + 1)
+                val valueStart = line.indexOf('[', keyEnd + 1)
+                val valueEnd = line.indexOf(']', valueStart + 1)
+                if (keyStart >= 0 && keyEnd > keyStart &&
+                    valueStart > keyEnd && valueEnd > valueStart
+                ) {
+                    line.substring(keyStart + 1, keyEnd) to
+                        line.substring(valueStart + 1, valueEnd)
+                } else {
+                    null
+                }
+            }.toMap()
+        }.getOrDefault(emptyMap())
 
         /** Total physical RAM in megabytes, or 0 if it cannot be read. */
         fun ramMb(context: Context): Int {
@@ -118,7 +150,7 @@ class DeviceProfileDetector(private val context: Context) {
         val model = Build.MODEL.orEmpty().trim()
         val sdk = Build.VERSION.SDK_INT
         val osName = "Android ${Build.VERSION.RELEASE}".trim()
-        val properties = readSystemProperties()
+        val properties = systemProperties()
         val skin = detectSkin(properties, manufacturer, brand)
 
         val totalRamMb = ramMb(context)
@@ -214,26 +246,4 @@ class DeviceProfileDetector(private val context: Context) {
         }
     }
 
-    /**
-     * `getprop` is a stable Android tool. Reading all properties at once is
-     * cheaper than spawning a process per property and avoids hidden APIs.
-     */
-    private fun readSystemProperties(): Map<String, String> = runCatching {
-        val process = ProcessBuilder("/system/bin/getprop")
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.bufferedReader().use { it.readText() }
-        process.waitFor()
-        output.lineSequence().mapNotNull { line ->
-            val keyStart = line.indexOf('[')
-            val keyEnd = line.indexOf(']', keyStart + 1)
-            val valueStart = line.indexOf('[', keyEnd + 1)
-            val valueEnd = line.indexOf(']', valueStart + 1)
-            if (keyStart >= 0 && keyEnd > keyStart && valueStart > keyEnd && valueEnd > valueStart) {
-                line.substring(keyStart + 1, keyEnd) to line.substring(valueStart + 1, valueEnd)
-            } else {
-                null
-            }
-        }.toMap()
-    }.getOrDefault(emptyMap())
 }
