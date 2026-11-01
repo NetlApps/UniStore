@@ -188,7 +188,11 @@ fun UpdateHubRoot(viewModel: AppViewModel) {
                                     MainScreen(
                                         state = state,
                                         onCheck = viewModel::checkUpdates,
-                                        onAdd = { navController.navigate(Routes.ADD) },
+                                        onAdd = {
+                                            // Always open the checklist unfiltered.
+                                            viewModel.setSearch("")
+                                            navController.navigate(Routes.ADD)
+                                        },
                                         onSettings = { section ->
                                             navController.navigate(Routes.settings(section))
                                         },
@@ -242,7 +246,10 @@ fun UpdateHubRoot(viewModel: AppViewModel) {
                                         onInterval = viewModel::setIntervalHours,
                                         onCheckSystemApps = viewModel::setCheckSystemApps,
                                         onCheck = viewModel::checkUpdates,
-                                        onManageApps = { navController.navigate(Routes.ADD) },
+                                        onManageApps = {
+                                            viewModel.setSearch("")
+                                            navController.navigate(Routes.ADD)
+                                        },
                                         onMessage = viewModel::showMessage,
                                         initialSection = SettingsSection.fromKey(
                                             entry.arguments?.getString(Routes.SETTINGS_SECTION)
