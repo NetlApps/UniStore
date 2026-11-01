@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Вопросы и обсуждения
+    url: https://github.com/NetlYouTube/UniStore/discussions
+    about: Задайте вопрос, покажите идею или обсудите развитие проекта.
+  - name: FAQ и документация
+    url: https://github.com/NetlYouTube/UniStore#faq
+    about: Установка, сборка, поддерживаемые магазины и частые вопросы.

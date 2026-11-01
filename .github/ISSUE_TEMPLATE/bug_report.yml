@@ -1,0 +1,111 @@
+name: Сообщение об ошибке
+description: Что-то работает не так — расскажите, как это повторить.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт. Чем точнее данные, тем быстрее получится найти причину.
+        Не прикладывайте личные данные, токены, IMEI, почту и чужие APK.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Перед отправкой
+      options:
+        - label: Я проверил существующие issues и не нашёл дубликат.
+          required: true
+        - label: Я удалил из логов и скриншотов личные данные и токены.
+          required: true
+
+  - type: input
+    id: unistore_version
+    attributes:
+      label: Версия UniStore
+      placeholder: "1.1.7"
+    validations:
+      required: true
+
+  - type: input
+    id: android_version
+    attributes:
+      label: Версия Android и прошивка
+      placeholder: "Android 16, HyperOS 3"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Устройство
+      placeholder: "Xiaomi 2511FPC34G"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: Магазин или источник
+      options:
+        - Google Play
+        - RuStore
+        - APKPure
+        - F-Droid
+        - Aptoide
+        - GetApps
+        - Galaxy Store
+        - V-Appstore
+        - Flyme Store
+        - Другой или не знаю
+    validations:
+      required: true
+
+  - type: input
+    id: app
+    attributes:
+      label: Приложение и версия
+      description: Пакет и установленная версия, если проблема связана с обновлением.
+      placeholder: "com.example.app, 1.2.3"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Что произошло
+      description: Опишите симптом и текст ошибки.
+      placeholder: "При проверке RuStore приложение показывает..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Открыть UniStore
+        2. Нажать «Проверить»
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+
+  - type: textarea
+    id: logcat
+    attributes:
+      label: Лог logcat
+      description: Вставьте строки с тегом UpdateHub. Удалите токены, почту, IMEI и другие личные данные.
+      render: text
+      placeholder: |
+        adb logcat -d -v threadtime | findstr UpdateHub
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительно
+      description: Скриншоты без личных данных, ссылки, особенности прошивки или VPN.

@@ -1,0 +1,103 @@
+name: Daily digest
+
+on:
+  schedule:
+    # 06:00 UTC = 09:00 Moscow
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Collect issues and pull requests
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const digestTitle = "Ежедневная сводка по issues и PR";
+            const now = new Date();
+            const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+            const updated = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              since,
+              per_page: 100,
+            });
+
+            const issues = updated.filter(
+              (item) => !item.pull_request && item.title !== digestTitle,
+            );
+            const pulls = updated.filter((item) => item.pull_request);
+
+            const line = (item) => {
+              const labels = item.labels.map((label) => label.name).join(", ");
+              return `- [#${item.number}](${item.html_url}) ${item.title} — @${item.user.login}${labels ? ` · ${labels}` : ""}`;
+            };
+
+            const list = (items) =>
+              items.length ? items.map(line).join("\n") : "_Нет новых или обновлённых за сутки._";
+
+            const date = now.toLocaleDateString("ru-RU", {
+              timeZone: "Europe/Moscow",
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            });
+
+            const body = [
+              `## Сводка за ${date}`,
+              "",
+              `**Issues:** ${issues.length} · **Pull requests:** ${pulls.length}`,
+              "",
+              "### Issues",
+              list(issues),
+              "",
+              "### Pull requests",
+              list(pulls),
+              "",
+              "---",
+              `@${owner}, проверь новые отчёты. Для разбора логов, кода и приоритетов напиши в OpenCode: «разбери свежую сводку».`,
+            ].join("\n");
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100,
+            });
+            const digest = open.find(
+              (item) => !item.pull_request && item.title === digestTitle,
+            );
+
+            if (digest) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: digest.number,
+                body,
+              });
+              core.info(`Comment added to #${digest.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title: digestTitle,
+                body: `${body}\n\nЭтот issue создаётся автоматически и обновляется раз в день. Закрепи его, чтобы сводка была под рукой.`,
+                labels: ["daily-digest"],
+              });
+              core.info(`Created #${created.data.number}`);
+            }

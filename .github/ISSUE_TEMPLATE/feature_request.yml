@@ -1,0 +1,61 @@
+name: Предложение функции
+description: Идея, которая сделает UniStore удобнее.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Опишите задачу, а не только готовое решение. Так проще понять, что именно нужно.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Перед отправкой
+      options:
+        - label: Я проверил существующие issues и не нашёл похожее предложение.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему это решает
+      description: Что сейчас неудобно или чего не хватает?
+      placeholder: "Сейчас приходится вручную..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+      placeholder: "Добавить..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Какие ещё варианты вы рассматривали?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Область
+      options:
+        - Проверка обновлений
+        - Установка APK/XAPK
+        - Интерфейс и темы
+        - Магазины и источники
+        - Уведомления
+        - Производительность
+        - Другое
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительно
+      description: Ссылки, примеры, скриншоты без личных данных.
