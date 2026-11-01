@@ -1859,7 +1859,7 @@ private fun ManageAppsCard(
                         "приложение",
                         "приложения",
                         "приложений"
-                    )} · нажмите, чтобы поставить галочки",
+                    )}",
                     style = MaterialTheme.typography.labelSmall,
                     color = scheme.onSurfaceVariant,
                     maxLines = 1,
