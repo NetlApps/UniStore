@@ -1,0 +1,39 @@
+# Gradle
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin
+.kotlin/
+
+# Build artifacts
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.log
+!UniStore-1.1.7.apk
+
+# Local toolchain and research data
+tools/
+dl/
+research/
+
+# Signing keys — never commit private keys
+keystore/
+*.jks
+*.keystore
+
+# OS
+.DS_Store
+Thumbs.db
