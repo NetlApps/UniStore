@@ -2,16 +2,12 @@ package ru.updatehub.app.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -35,6 +31,7 @@ import kotlinx.coroutines.delay
 import ru.updatehub.app.R
 import ru.updatehub.app.data.SeasonalEffect
 import ru.updatehub.app.ui.theme.LocalReduceMotion
+import ru.updatehub.app.ui.theme.rememberCappedLoop
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -43,6 +40,21 @@ import kotlin.random.Random
 
 /** The seasonal effect chosen for the current date or manually in Settings. */
 val LocalSeasonalEffect = staticCompositionLocalOf { SeasonalEffect.NONE }
+
+private val autumnLeafColors = listOf(
+    Color(0xFFE07A2F),
+    Color(0xFFC25E2E),
+    Color(0xFFE9B44C),
+    Color(0xFF9C5A2E)
+)
+
+private val garlandBulbColors = listOf(
+    Color(0xFFFF5A5F),
+    Color(0xFFFFC857),
+    Color(0xFF4CD964),
+    Color(0xFF5AA9FF),
+    Color(0xFFFF7AD9)
+)
 
 private data class SeasonalParticle(
     val x: Float,
@@ -106,40 +118,42 @@ fun SeasonalEffectOverlay(modifier: Modifier = Modifier) {
     }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     // On weak devices the decoration stays visible, but it is drawn once at a
-    // fixed moment instead of repainting the whole canvas every frame.
-    val progress = if (reduceMotion) {
-        0.4f
+    // fixed moment instead of repainting the whole canvas every frame. On
+    // regular devices the slow drift is published at 30 fps: the movement is
+    // far too gentle for the skipped frames to be visible, while every other
+    // vsync no longer repaints a full-screen canvas.
+    val loop = if (reduceMotion) {
+        null
     } else {
-        val transition = rememberInfiniteTransition(label = "seasonal-$effect")
-        val animated by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(
-                    durationMillis = when (effect) {
-                        SeasonalEffect.AUTUMN -> 16000
-                        SeasonalEffect.WINTER -> 15000
-                        SeasonalEffect.NEW_YEAR -> 12000
-                        SeasonalEffect.HALLOWEEN -> 9000
-                        SeasonalEffect.NONE -> 12000
-                    },
-                    easing = LinearEasing
-                )
-            ),
-            label = "seasonalProgress"
+        rememberCappedLoop(
+            durationMillis = when (effect) {
+                SeasonalEffect.AUTUMN -> 16_000
+                SeasonalEffect.WINTER -> 15_000
+                SeasonalEffect.NEW_YEAR -> 12_000
+                SeasonalEffect.HALLOWEEN -> 9_000
+                SeasonalEffect.NONE -> 12_000
+            }
         )
-        animated
     }
 
-    val snowflakes = listOf(
-        ImageBitmap.imageResource(R.drawable.snowflake_1),
-        ImageBitmap.imageResource(R.drawable.snowflake_2),
-        ImageBitmap.imageResource(R.drawable.snowflake_3),
-        ImageBitmap.imageResource(R.drawable.snowflake_4),
-        ImageBitmap.imageResource(R.drawable.snowflake_5)
-    )
+    // Snowflake bitmaps are only needed by the winter scenes; decoding five
+    // PNGs for autumn or Halloween delayed the first frame for nothing.
+    val snowflakes = if (
+        effect == SeasonalEffect.WINTER || effect == SeasonalEffect.NEW_YEAR
+    ) {
+        listOf(
+            ImageBitmap.imageResource(R.drawable.snowflake_1),
+            ImageBitmap.imageResource(R.drawable.snowflake_2),
+            ImageBitmap.imageResource(R.drawable.snowflake_3),
+            ImageBitmap.imageResource(R.drawable.snowflake_4),
+            ImageBitmap.imageResource(R.drawable.snowflake_5)
+        )
+    } else {
+        emptyList()
+    }
 
     Canvas(modifier = modifier.fillMaxSize()) {
+        val progress = loop?.value ?: 0.4f
         when (effect) {
             SeasonalEffect.WINTER -> drawWinter(particles, progress, dark, snowflakes)
             SeasonalEffect.AUTUMN -> drawAutumn(particles, progress)
@@ -298,12 +312,6 @@ private fun DrawScope.drawAutumn(
     particles: List<SeasonalParticle>,
     progress: Float
 ) {
-    val colors = listOf(
-        Color(0xFFE07A2F),
-        Color(0xFFC25E2E),
-        Color(0xFFE9B44C),
-        Color(0xFF9C5A2E)
-    )
     particles.forEach { particle ->
         val t = (particle.phase + progress * particle.speed) % 1f
         val x = (
@@ -314,7 +322,7 @@ private fun DrawScope.drawAutumn(
         val y = (-0.08f + t * 1.16f) * size.height
         val width = particle.size * 1.7f
         val height = width * 0.55f
-        val color = colors[particle.tone % colors.size].copy(alpha = 0.78f)
+        val color = autumnLeafColors[particle.tone % autumnLeafColors.size].copy(alpha = 0.78f)
         rotate(
             degrees = particle.spin + t * 420f,
             pivot = Offset(x, y)
@@ -636,13 +644,7 @@ private fun DrawScope.drawGarland(progress: Float, dark: Boolean) {
     }
     drawPath(path, stringColor, style = Stroke(width = 1.2.dp.toPx()))
 
-    val bulbColors = listOf(
-        Color(0xFFFF5A5F),
-        Color(0xFFFFC857),
-        Color(0xFF4CD964),
-        Color(0xFF5AA9FF),
-        Color(0xFFFF7AD9)
-    )
+    val bulbColors = garlandBulbColors
     val bulbGap = 21.dp.toPx()
     var x = bulbGap * 0.35f
     var index = 0

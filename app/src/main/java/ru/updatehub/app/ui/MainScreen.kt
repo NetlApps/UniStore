@@ -243,7 +243,7 @@ fun MainScreen(
                         UpdateStatus.UP_TO_DATE -> 5
                         UpdateStatus.NOT_FOUND -> 6
                     }
-                }.thenBy { it.label.lowercase() }
+                }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
             )
     }
 

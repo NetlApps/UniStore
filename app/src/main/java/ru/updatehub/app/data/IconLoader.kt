@@ -27,11 +27,20 @@ class IconLoader(private val context: Context) {
         cache.evictAll()
     }
 
-    suspend fun load(packageName: String): ImageBitmap? = withContext(Dispatchers.IO) {
-        cache.get(packageName) ?: runCatching {
-            val drawable = context.packageManager.getApplicationIcon(packageName)
-            drawable.toBitmap(width = iconSize, height = iconSize).asImageBitmap()
-                .also { cache.put(packageName, it) }
-        }.getOrNull()
+    /** Cache hit without leaving the caller's thread; safe for composition. */
+    fun peek(packageName: String): ImageBitmap? = cache.get(packageName)
+
+    suspend fun load(packageName: String): ImageBitmap? {
+        // The list is rebuilt when the user comes back from another screen.
+        // A cached icon must appear on the first frame, so a hit skips the
+        // IO dispatcher entirely instead of flashing a letter placeholder.
+        cache.get(packageName)?.let { return it }
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val drawable = context.packageManager.getApplicationIcon(packageName)
+                drawable.toBitmap(width = iconSize, height = iconSize).asImageBitmap()
+                    .also { cache.put(packageName, it) }
+            }.getOrNull()
+        }
     }
 }

@@ -1683,6 +1683,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun loadIcon(packageName: String): ImageBitmap? =
         container.iconLoader.load(packageName)
 
+    fun peekIcon(packageName: String): ImageBitmap? =
+        container.iconLoader.peek(packageName)
+
     private fun reconcile(
         results: Map<String, AppUpdateResult>,
         installed: Map<String, InstalledApp>,

@@ -63,7 +63,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -82,6 +81,7 @@ import ru.updatehub.app.data.UpdateSource
 import ru.updatehub.app.ui.AppViewModel
 import ru.updatehub.app.ui.theme.LocalReduceMotion
 import ru.updatehub.app.ui.theme.pressScale
+import ru.updatehub.app.ui.theme.rememberCappedLoop
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -107,9 +107,12 @@ fun AppIcon(
     modifier: Modifier = Modifier
 ) {
     val viewModel = LocalAppViewModel.current
-    var icon by remember(packageName) { mutableStateOf<ImageBitmap?>(null) }
+    // Start from the in-memory cache: after navigation the icon is already
+    // decoded, and waiting for another IO round trip used to flash the letter
+    // placeholder on every card.
+    var icon by remember(packageName) { mutableStateOf(viewModel.peekIcon(packageName)) }
     LaunchedEffect(packageName) {
-        icon = viewModel.loadIcon(packageName)
+        if (icon == null) icon = viewModel.loadIcon(packageName)
     }
     val shape = RoundedCornerShape(size * 0.29f)
     val palette = remember(packageName) {
@@ -273,24 +276,17 @@ fun AnimatedGlowBackground(
 ) {
     val scheme = MaterialTheme.colorScheme
     val reduceMotion = LocalReduceMotion.current
-    val shift = if (reduceMotion) {
-        0.5f
-    } else {
-        val transition = rememberInfiniteTransition(label = "glow")
-        val animated by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(11000, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "glowShift"
-        )
-        animated
-    }
+    // A 22-second triangle: eleven seconds to one side, eleven back. Published
+    // at 30 fps instead of every vsync; the shift is far too slow to notice.
+    val loop = if (reduceMotion) null else rememberCappedLoop(durationMillis = 22_000)
 
     Box(modifier = modifier.fillMaxSize()) {
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            val shift = loop?.let { state ->
+                val phase = state.value
+                if (phase <= 0.5f) phase * 2f else (1f - phase) * 2f
+            } ?: 0.5f
+
             drawRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(scheme.background, scheme.surfaceContainerLowest)

@@ -5,9 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.content.pm.PackageInfoCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import ru.updatehub.app.BuildConfig
 import java.text.Collator
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -99,15 +101,19 @@ class AppScanner(private val context: Context) {
                 )
             }.sortedWith(compareBy(collator) { it.label })
                 .also { apps ->
-                    val systemNames = apps.asSequence()
-                        .filter { it.isSystem }
-                        .map { it.packageName }
-                        .toList()
-                    android.util.Log.d(
-                        "UpdateHub",
-                        "Сканирование: ${apps.size} приложений, системных " +
-                            "${systemNames.size}: ${systemNames.take(25).joinToString()}"
-                    )
+                    // Building the log string is pointless in release unless
+                    // someone explicitly enabled debug logs for this tag.
+                    if (BuildConfig.DEBUG) {
+                        val systemNames = apps.asSequence()
+                            .filter { it.isSystem }
+                            .map { it.packageName }
+                            .toList()
+                        Log.d(
+                            "UpdateHub",
+                            "Сканирование: ${apps.size} приложений, системных " +
+                                "${systemNames.size}: ${systemNames.take(25).joinToString()}"
+                        )
+                    }
                 }
         }
 
