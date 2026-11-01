@@ -17,6 +17,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -51,6 +53,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
@@ -208,6 +211,7 @@ fun MainScreen(
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val listState = rememberLazyListState()
+    val reduceMotion = LocalReduceMotion.current
 
     val installedMap = remember(state.installed) {
         state.installed.associateBy { it.packageName }
@@ -312,7 +316,7 @@ fun MainScreen(
                             start = 16.dp,
                             end = 16.dp,
                             top = 4.dp,
-                            bottom = 32.dp
+                            bottom = 110.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -414,17 +418,6 @@ fun MainScreen(
                         }
                     }
 
-                    if (rows.isNotEmpty() && allRows.size <= 10) {
-                        item(key = "addMore") {
-                            StaggeredAppear(index = visibleRows.size + 3) {
-                                AddMoreAppsCard(
-                                    trackedCount = allRows.size,
-                                    onAdd = onAdd
-                                )
-                            }
-                        }
-                    }
-
                     if (rows.isNotEmpty()) {
                         item(key = "footer") {
                             Text(
@@ -439,6 +432,36 @@ fun MainScreen(
                     }
                     }
                 }
+            }
+        }
+
+        // The checklist is one tap away at all times: the same draft lets the
+        // user add new apps and uncheck the ones they no longer follow.
+        AnimatedVisibility(
+            visible = allRows.isNotEmpty(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(if (reduceMotion) snap() else tween(220)) +
+                slideInVertically(if (reduceMotion) snap() else tween(280)) { it / 3 },
+            exit = fadeOut(if (reduceMotion) snap() else tween(150)) +
+                slideOutVertically(if (reduceMotion) snap() else tween(220)) { it / 3 }
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.4f to MaterialTheme.colorScheme.background.copy(alpha = 0.78f),
+                            1f to MaterialTheme.colorScheme.background
+                        )
+                    )
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, top = 22.dp, bottom = 10.dp)
+            ) {
+                ManageAppsCard(
+                    trackedCount = allRows.size,
+                    onAdd = onAdd
+                )
             }
         }
     }
@@ -1775,7 +1798,7 @@ private fun NoCompatibleUpdatesState(onCheck: () -> Unit) {
 }
 
 @Composable
-private fun AddMoreAppsCard(
+private fun ManageAppsCard(
     trackedCount: Int,
     onAdd: () -> Unit
 ) {
@@ -1799,8 +1822,9 @@ private fun AddMoreAppsCard(
             .pressScale(interaction)
             .then(trigger.modifier),
         shape = RoundedCornerShape(20.dp),
-        color = scheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, scheme.primary.copy(alpha = 0.28f))
+        color = scheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, scheme.primary.copy(alpha = 0.28f)),
+        shadowElevation = 8.dp
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
@@ -1814,7 +1838,7 @@ private fun AddMoreAppsCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.Add,
+                    imageVector = Icons.Rounded.Apps,
                     contentDescription = null,
                     tint = scheme.primary,
                     modifier = Modifier.size(21.dp)
@@ -1823,9 +1847,11 @@ private fun AddMoreAppsCard(
             Spacer(Modifier.width(11.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Добавить ещё приложения",
+                    text = "Добавить или убрать приложения",
                     style = MaterialTheme.typography.titleSmall,
-                    color = scheme.onSurface
+                    color = scheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "Отслеживается ${pluralRu(
@@ -1833,7 +1859,7 @@ private fun AddMoreAppsCard(
                         "приложение",
                         "приложения",
                         "приложений"
-                    )} · нажмите, чтобы изменить список",
+                    )} · нажмите, чтобы поставить галочки",
                     style = MaterialTheme.typography.labelSmall,
                     color = scheme.onSurfaceVariant,
                     maxLines = 1,
