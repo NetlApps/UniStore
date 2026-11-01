@@ -21,12 +21,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Collect issues and pull requests
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const digestTitle = "Ежедневная сводка по issues и PR";
+            const digestTitle = "Р•Р¶РµРґРЅРµРІРЅР°СЏ СЃРІРѕРґРєР° РїРѕ issues Рё PR";
             const now = new Date();
             const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -45,11 +45,11 @@ jobs:
 
             const line = (item) => {
               const labels = item.labels.map((label) => label.name).join(", ");
-              return `- [#${item.number}](${item.html_url}) ${item.title} — @${item.user.login}${labels ? ` · ${labels}` : ""}`;
+              return `- [#${item.number}](${item.html_url}) ${item.title} вЂ” @${item.user.login}${labels ? ` В· ${labels}` : ""}`;
             };
 
             const list = (items) =>
-              items.length ? items.map(line).join("\n") : "_Нет новых или обновлённых за сутки._";
+              items.length ? items.map(line).join("\n") : "_РќРµС‚ РЅРѕРІС‹С… РёР»Рё РѕР±РЅРѕРІР»С‘РЅРЅС‹С… Р·Р° СЃСѓС‚РєРё._";
 
             const date = now.toLocaleDateString("ru-RU", {
               timeZone: "Europe/Moscow",
@@ -59,9 +59,9 @@ jobs:
             });
 
             const body = [
-              `## Сводка за ${date}`,
+              `## РЎРІРѕРґРєР° Р·Р° ${date}`,
               "",
-              `**Issues:** ${issues.length} · **Pull requests:** ${pulls.length}`,
+              `**Issues:** ${issues.length} В· **Pull requests:** ${pulls.length}`,
               "",
               "### Issues",
               list(issues),
@@ -70,7 +70,7 @@ jobs:
               list(pulls),
               "",
               "---",
-              `@${owner}, проверь новые отчёты. Для разбора логов, кода и приоритетов напиши в OpenCode: «разбери свежую сводку».`,
+              `@${owner}, РїСЂРѕРІРµСЂСЊ РЅРѕРІС‹Рµ РѕС‚С‡С‘С‚С‹. Р”Р»СЏ СЂР°Р·Р±РѕСЂР° Р»РѕРіРѕРІ, РєРѕРґР° Рё РїСЂРёРѕСЂРёС‚РµС‚РѕРІ РЅР°РїРёС€Рё РІ OpenCode: В«СЂР°Р·Р±РµСЂРё СЃРІРµР¶СѓСЋ СЃРІРѕРґРєСѓВ».`,
             ].join("\n");
 
             const open = await github.paginate(github.rest.issues.listForRepo, {
@@ -96,8 +96,9 @@ jobs:
                 owner,
                 repo,
                 title: digestTitle,
-                body: `${body}\n\nЭтот issue создаётся автоматически и обновляется раз в день. Закрепи его, чтобы сводка была под рукой.`,
+                body: `${body}\n\nР­С‚РѕС‚ issue СЃРѕР·РґР°С‘С‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Рё РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ СЂР°Р· РІ РґРµРЅСЊ. Р—Р°РєСЂРµРїРё РµРіРѕ, С‡С‚РѕР±С‹ СЃРІРѕРґРєР° Р±С‹Р»Р° РїРѕРґ СЂСѓРєРѕР№.`,
                 labels: ["daily-digest"],
               });
               core.info(`Created #${created.data.number}`);
             }
+
