@@ -2,10 +2,13 @@ package ru.updatehub.app.data.checkers
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -100,8 +103,17 @@ object Http {
      */
     fun resetNetworkState() {
         dns.clear()
-        client.connectionPool.evictAll()
+        // Closing a TLS socket can send a close_notify, which is a network
+        // write. Doing that from the main thread throws
+        // NetworkOnMainThreadException when the pool still holds connections
+        // from the previous link, so eviction runs on a background thread.
+        maintenanceScope.launch {
+            runCatching { client.connectionPool.evictAll() }
+        }
     }
+
+    private val maintenanceScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Resolves store hostnames before the first check request needs them.
