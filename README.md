@@ -16,6 +16,8 @@
 </div>
 
 > **Сайт:** [netlapps.github.io/UniStore](https://netlapps.github.io/UniStore/) · **Статус:** активная разработка. Последний релиз — **1.1.7** (versionCode 11). Приложение проверено на Xiaomi `2511FPC34G` (Android 16, HyperOS 3).
+>
+> **Язык:** Русский · [English](#english)
 
 **UniStore** — Android-приложение на Kotlin и Jetpack Compose, которое собирает обновления установленных приложений из нескольких магазинов и показывает их в одном списке. Это не магазин и не замена Google Play: UniStore находит версии, сравнивает их с установленными, проверяет совместимость и подпись, скачивает APK/XAPK и передаёт файл системному установщику Android.
 
@@ -34,6 +36,7 @@
 | [Технологии](#технологии) | [Качество и проверка](#качество-и-проверка) |
 | [Ограничения](#ограничения) | [FAQ](#faq) |
 | [Участие в разработке](#участие-в-разработке) | [Лицензия](#лицензия) |
+| [English](#english) | [Дисклеймер](#дисклеймер) |
 
 ## О проекте
 
@@ -354,6 +357,44 @@ Android запрещает тихую установку APK без root. UniSto
 UniStore проверяет пакет, версию и сертификат APK до установки и блокирует файлы с чужой подписью. В проекте нет рекламных и аналитических SDK. Скачиваемые файлы удаляются из кэша после установки или отмены.
 
 </details>
+
+## English
+
+**UniStore** is an open-source Android app that brings app updates from multiple stores into one list. It is not a store or a replacement for Google Play: it finds available versions, compares them with installed apps, checks compatibility and APK signatures, downloads APK/XAPK files and hands them to Android's system installer. No root required.
+
+The app UI and the rest of this README are currently in Russian; this section is a compact English overview.
+
+### Highlights
+
+- **9 stores with automatic checks:** Google Play, RuStore, APKPure, F-Droid, Aptoide, GetApps, Galaxy Store, V-Appstore and Flyme Store.
+- **7 stores with manual links:** AppGallery, Honor App Market, HeyTap Store, Palm Store, Amazon Appstore, Lenovo App Store and ZTE App Store.
+- **Direct APK/XAPK downloads** from RuStore, APKPure, F-Droid and Aptoide, including split APKs.
+- **Checks before installation:** package name, version, ABI, `minSdk`/`targetSdk` and SHA-1/SHA-256 certificate. APKs with a different signature are blocked.
+- **Privacy:** no ads, accounts, analytics or telemetry. Settings and the tracked app list stay on the device.
+- **Small and fast:** Android 8.0+, release APK about 2 MB, parallel checks and a low-end device mode.
+- **Russian UI:** Material 3, four themes, seven color schemes and seasonal effects.
+- **Quality:** 86 unit tests and a green CI workflow.
+
+### Install
+
+1. Download [UniStore-1.1.7.apk](https://github.com/NetlApps/UniStore/releases/download/v1.1.7/UniStore-1.1.7.apk).
+2. Open the file and allow installs from this source if Android asks.
+3. On first launch, choose stores, add apps and tap **«Проверить»** (Check).
+4. Confirm each update in the standard Android installer.
+
+SHA-256: `905C278640E139CBAABACC68C9E28260858C58867B127B2235D277B47D5C7F4E`
+
+### Links
+
+- [Website](https://netlapps.github.io/UniStore/)
+- [Latest release](https://github.com/NetlApps/UniStore/releases/latest)
+- [Changelog](CHANGELOG.md)
+- [Issues](https://github.com/NetlApps/UniStore/issues)
+- [Discussions](https://github.com/NetlApps/UniStore/discussions)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
+[Русская версия](#о-проекте)
 
 ## Участие в разработке
 
