@@ -38,7 +38,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AcUnit
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Contrast
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.AcUnit
@@ -49,7 +52,6 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Build
@@ -58,7 +60,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -69,7 +70,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -152,14 +152,15 @@ enum class SettingsSection(val key: String, val itemIndex: Int) {
     TOP("top", 0),
     APPEARANCE("appearance", 0),
     SEASONAL("seasonal", 1),
-    SOURCES("sources", 2),
-    MANUAL_STORES("manual_stores", 3),
-    DEVICE("device", 4),
-    PERFORMANCE("performance", 5),
-    BACKGROUND("background", 6),
-    CHECK("check", 7),
-    SYSTEM("system", 8),
-    ABOUT("about", 9);
+    APPS("apps", 2),
+    SOURCES("sources", 3),
+    MANUAL_STORES("manual_stores", 4),
+    DEVICE("device", 5),
+    PERFORMANCE("performance", 6),
+    BACKGROUND("background", 7),
+    CHECK("check", 8),
+    SYSTEM("system", 9),
+    ABOUT("about", 10);
 
     companion object {
         fun fromKey(key: String?): SettingsSection =
@@ -183,6 +184,7 @@ fun SettingsScreen(
     onInterval: (Int) -> Unit,
     onCheckSystemApps: (Boolean) -> Unit,
     onCheck: () -> Unit,
+    onManageApps: () -> Unit,
     onMessage: (String) -> Unit,
     initialSection: SettingsSection = SettingsSection.TOP
 ) {
@@ -300,8 +302,18 @@ fun SettingsScreen(
                         }
                     }
 
-                    item(key = "sources") {
+                    item(key = "apps") {
                         StaggeredAppear(index = 2) {
+                            AppsSettingsSection(
+                                trackedCount = trackedCount,
+                                installedCount = installedCount,
+                                onManageApps = onManageApps
+                            )
+                        }
+                    }
+
+                    item(key = "sources") {
+                        StaggeredAppear(index = 3) {
                             SourcesSettingsSection(
                                 enabledSources = state.settings.enabledSources,
                                 storeHealth = state.storeHealth,
@@ -312,7 +324,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "manual_stores") {
-                        StaggeredAppear(index = 3) {
+                        StaggeredAppear(index = 4) {
                             ManualStoresSection(
                                 stores = manualStores,
                                 onOpenStore = onOpenManualStore
@@ -321,13 +333,13 @@ fun SettingsScreen(
                     }
 
                     item(key = "device") {
-                        StaggeredAppear(index = 4) {
+                        StaggeredAppear(index = 5) {
                             DeviceSection(profile = state.deviceProfile)
                         }
                     }
 
                     item(key = "performance") {
-                        StaggeredAppear(index = 5) {
+                        StaggeredAppear(index = 6) {
                             WeakDeviceSection(
                                 enabled = state.settings.weakDevice,
                                 profile = state.deviceProfile,
@@ -337,7 +349,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "background") {
-                        StaggeredAppear(index = 6) {
+                        StaggeredAppear(index = 7) {
                             BackgroundCheckSection(
                                 autoCheck = state.settings.autoCheck,
                                 intervalHours = state.settings.intervalHours,
@@ -348,7 +360,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "check") {
-                        StaggeredAppear(index = 7) {
+                        StaggeredAppear(index = 8) {
                             CheckNowSection(
                                 lastCheckAt = state.settings.lastCheckAt,
                                 trackedCount = trackedCount,
@@ -359,7 +371,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "system") {
-                        StaggeredAppear(index = 8) {
+                        StaggeredAppear(index = 9) {
                             SystemAppsSection(
                                 checkSystemApps = state.settings.checkSystemApps,
                                 onCheckSystemApps = onCheckSystemApps
@@ -368,7 +380,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "about") {
-                        StaggeredAppear(index = 9) {
+                        StaggeredAppear(index = 10) {
                             AboutSection(
                                 installedCount = installedCount,
                                 trackedCount = trackedCount
@@ -694,15 +706,8 @@ private fun SourcesSettingsSection(
     vpnBypassed: Boolean,
     onToggleSource: (UpdateSource) -> Unit
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
-    val normalizedQuery = query.trim().lowercase()
     val universal = UpdateSource.entries.filter { it.isUniversal }
     val manufacturer = UpdateSource.entries.filterNot { it.isUniversal }
-
-    fun matches(source: UpdateSource): Boolean =
-        normalizedQuery.isBlank() ||
-            source.title.lowercase().contains(normalizedQuery) ||
-            source.subtitle.lowercase().contains(normalizedQuery)
 
     SectionCard(contentPadding = PaddingValues(18.dp)) {
         SectionTitle(
@@ -711,60 +716,21 @@ private fun SourcesSettingsSection(
             subtitle = "Где искать новые версии приложений"
         )
 
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
-            placeholder = {
-                Text(
-                    text = "Найти магазин",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            },
-            textStyle = MaterialTheme.typography.bodyMedium
-        )
-
         Spacer(Modifier.height(14.dp))
 
-        if (normalizedQuery.isBlank()) {
-            SourceGroupHeader(
-                title = "Топ-5 универсальных",
-                subtitle = "Работают на любом Android-телефоне"
-            )
-            SourceRows(universal, enabledSources, storeHealth, vpnBypassed, onToggleSource)
+        SourceGroupHeader(
+            title = "Топ-5 универсальных",
+            subtitle = "Работают на любом Android-телефоне"
+        )
+        SourceRows(universal, enabledSources, storeHealth, vpnBypassed, onToggleSource)
 
-            Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(16.dp))
 
-            SourceGroupHeader(
-                title = "Магазины производителей",
-                subtitle = "Для техники конкретного бренда"
-            )
-            SourceRows(manufacturer, enabledSources, storeHealth, vpnBypassed, onToggleSource)
-        } else {
-            val filtered = (universal + manufacturer).filter(::matches)
-            if (filtered.isEmpty()) {
-                Text(
-                    text = "Среди источников ничего не найдено. Магазины без публичного API " +
-                        "перечислены ниже отдельно.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            } else {
-                SourceRows(filtered, enabledSources, storeHealth, vpnBypassed, onToggleSource)
-            }
-        }
+        SourceGroupHeader(
+            title = "Магазины производителей",
+            subtitle = "Для техники конкретного бренда"
+        )
+        SourceRows(manufacturer, enabledSources, storeHealth, vpnBypassed, onToggleSource)
 
         Spacer(Modifier.height(10.dp))
         Text(
@@ -1138,6 +1104,92 @@ private fun WeakDeviceSection(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun AppsSettingsSection(
+    trackedCount: Int,
+    installedCount: Int,
+    onManageApps: () -> Unit
+) {
+    val haptics = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val trigger = rememberPointOriginTrigger(onManageApps)
+
+    SectionCard(contentPadding = PaddingValues(18.dp)) {
+        SectionTitle(
+            icon = Icons.Rounded.Apps,
+            title = "Приложения",
+            subtitle = "Список для проверки обновлений"
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        trigger.onClick()
+                    }
+                )
+                .pressScale(interaction)
+                .then(trigger.modifier),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Apps,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+                Spacer(Modifier.width(11.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = pluralRu(
+                            trackedCount,
+                            "приложение отслеживается",
+                            "приложения отслеживаются",
+                            "приложений отслеживается"
+                        ),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Из $installedCount установленного · изменить",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }
 

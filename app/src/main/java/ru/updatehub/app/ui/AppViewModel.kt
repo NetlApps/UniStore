@@ -1506,53 +1506,64 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addPackages(packages: Set<String>) {
-        if (packages.isEmpty()) return
+    /**
+     * Applies a batch of additions and removals in one DataStore write. The
+     * management screen edits a local draft, so both halves of the update must
+     * land atomically: two separate writes could overwrite each other when the
+     * user confirms quickly.
+     */
+    fun applyTrackedChanges(packagesToAdd: Set<String>, packagesToRemove: Set<String>) {
+        if (packagesToAdd.isEmpty() && packagesToRemove.isEmpty()) return
         val state = _uiState.value
         val installed = state.installed.associateBy { it.packageName }
-        val requested = packages - UNISTORE_PACKAGE
-        val allowed = if (state.settings.checkSystemApps) {
-            requested
+        val requestedAdd = packagesToAdd - UNISTORE_PACKAGE
+        val allowedAdd = if (state.settings.checkSystemApps) {
+            requestedAdd
         } else {
-            requested.filterTo(HashSet()) { packageName ->
+            requestedAdd.filterTo(HashSet()) { packageName ->
                 installed[packageName]?.isSystem != true
             }
         }
-        val skippedSystem = requested.size - allowed.size
+        val skippedSystem = requestedAdd.size - allowedAdd.size
+        val toRemove = (packagesToRemove - UNISTORE_PACKAGE)
+            .filterTo(HashSet()) { it in state.settings.trackedPackages }
 
-        viewModelScope.launch {
-            if (allowed.isNotEmpty()) {
-                val current = _uiState.value.settings.trackedPackages
-                settingsRepository.setTrackedPackages(current + allowed)
-                ensureSignatures(allowed)
+        if (allowedAdd.isEmpty() && toRemove.isEmpty()) {
+            if (skippedSystem > 0) {
+                showMessage("Системные приложения не добавляются без их проверки")
             }
+            return
+        }
+
+        toRemove.forEach { installJobs.remove(it)?.cancel() }
+        viewModelScope.launch {
+            val current = _uiState.value.settings.trackedPackages
+            settingsRepository.setTrackedPackages((current - toRemove) + allowedAdd)
+            if (allowedAdd.isNotEmpty()) ensureSignatures(allowedAdd)
+            val newResults = _uiState.value.results - toRemove
+            _uiState.update {
+                it.copy(
+                    results = newResults,
+                    installStates = it.installStates - toRemove
+                )
+            }
+            settingsRepository.setResultsJson(ResultSerializer.serialize(newResults.values))
             showMessage(
                 when {
-                    allowed.isEmpty() && skippedSystem > 0 ->
-                        "Системные приложения не добавляются без их проверки"
+                    allowedAdd.isNotEmpty() && toRemove.isNotEmpty() ->
+                        "Добавлено: ${allowedAdd.size}, убрано: ${toRemove.size}"
 
-                    allowed.size == 1 -> "Приложение добавлено"
-                    else -> "Добавлено приложений: ${allowed.size}"
+                    allowedAdd.size > 1 -> "Добавлено приложений: ${allowedAdd.size}"
+                    allowedAdd.size == 1 -> "Приложение добавлено"
+                    toRemove.size > 1 -> "Убрано приложений: ${toRemove.size}"
+                    else -> "Убрано из отслеживаемых"
                 }
             )
         }
     }
 
     fun removePackage(packageName: String) {
-        installJobs.remove(packageName)?.cancel()
-        viewModelScope.launch {
-            val current = _uiState.value.settings.trackedPackages
-            settingsRepository.setTrackedPackages(current - packageName)
-            val newResults = _uiState.value.results - packageName
-            _uiState.update {
-                it.copy(
-                    results = newResults,
-                    installStates = it.installStates - packageName
-                )
-            }
-            settingsRepository.setResultsJson(ResultSerializer.serialize(newResults.values))
-            showMessage("Убрано из отслеживаемых")
-        }
+        applyTrackedChanges(emptySet(), setOf(packageName))
     }
 
     fun toggleSource(source: UpdateSource) {

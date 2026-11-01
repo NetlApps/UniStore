@@ -212,8 +212,8 @@ fun UpdateHubRoot(viewModel: AppViewModel) {
                                         onBack = { navController.popBackStack() },
                                         onSearch = viewModel::setSearch,
                                         onShowSystem = viewModel::setShowSystemApps,
-                                        onAdd = { packages ->
-                                            viewModel.addPackages(packages)
+                                        onApply = { add, remove ->
+                                            viewModel.applyTrackedChanges(add, remove)
                                             navController.popBackStack()
                                         }
                                     )
@@ -242,6 +242,7 @@ fun UpdateHubRoot(viewModel: AppViewModel) {
                                         onInterval = viewModel::setIntervalHours,
                                         onCheckSystemApps = viewModel::setCheckSystemApps,
                                         onCheck = viewModel::checkUpdates,
+                                        onManageApps = { navController.navigate(Routes.ADD) },
                                         onMessage = viewModel::showMessage,
                                         initialSection = SettingsSection.fromKey(
                                             entry.arguments?.getString(Routes.SETTINGS_SECTION)

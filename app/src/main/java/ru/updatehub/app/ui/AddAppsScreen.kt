@@ -30,9 +30,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material3.FilterChip
@@ -44,7 +44,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,10 +51,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.updatehub.app.data.InstalledApp
@@ -73,17 +72,18 @@ fun AddAppsScreen(
     onBack: () -> Unit,
     onSearch: (String) -> Unit,
     onShowSystem: (Boolean) -> Unit,
-    onAdd: (Set<String>) -> Unit
+    onApply: (add: Set<String>, remove: Set<String>) -> Unit
 ) {
     val haptics = LocalHapticFeedback.current
-    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-
     val tracked = state.settings.trackedPackages
+    // Edits stay local until the user confirms them, so a stray tap cannot
+    // remove an app and several quick taps produce one atomic update.
+    var draft by remember(tracked) { mutableStateOf(tracked) }
+
     val query = state.search.trim()
     val systemVisible = state.showSystemApps && state.settings.checkSystemApps
-    val candidates = state.installed.filter { app ->
+    val apps = state.installed.filter { app ->
         (!app.isSystem || systemVisible) &&
-            app.packageName !in tracked &&
             (
                 query.isBlank() ||
                     app.label.contains(query, ignoreCase = true) ||
@@ -91,23 +91,20 @@ fun AddAppsScreen(
                 )
     }
 
-    LaunchedEffect(systemVisible) {
-        if (!systemVisible) {
-            val userPackages = state.installed
-                .asSequence()
-                .filter { !it.isSystem }
-                .map { it.packageName }
-                .toSet()
-            selected = selected.intersect(userPackages)
-        }
+    val additions = draft - tracked
+    val removals = tracked - draft
+    val changed = additions.isNotEmpty() || removals.isNotEmpty()
+    val removalOnly = additions.isEmpty() && removals.isNotEmpty()
+    val installedCount = state.installed.count {
+        !it.isSystem || state.settings.checkSystemApps
     }
 
     fun toggle(app: InstalledApp) {
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        selected = if (app.packageName in selected) {
-            selected - app.packageName
+        draft = if (app.packageName in draft) {
+            draft - app.packageName
         } else {
-            selected + app.packageName
+            draft + app.packageName
         }
     }
 
@@ -116,32 +113,22 @@ fun AddAppsScreen(
 
         Column(modifier = Modifier.fillMaxSize()) {
             ScreenHeader(
-                title = "Добавить приложения",
-                subtitle = if (state.loadingApps) {
-                    "Загружаем список…"
-                } else {
-                    "${pluralRu(candidates.size, "приложение", "приложения", "приложений")} доступно"
+                title = "Приложения",
+                subtitle = when {
+                    state.loadingApps -> "Загружаем список…"
+                    else -> "Отслеживается ${draft.size} из $installedCount"
                 },
                 onBack = onBack,
                 actions = {
-                    if (candidates.isNotEmpty()) {
+                    if (changed) {
                         TextButton(
                             onClick = {
-                                val allVisible = candidates.map { it.packageName }.toSet()
-                                selected = if (selected.containsAll(allVisible)) {
-                                    selected - allVisible
-                                } else {
-                                    selected + allVisible
-                                }
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                draft = tracked
                             }
                         ) {
                             Text(
-                                text = if (selected.containsAll(candidates.map { it.packageName })) {
-                                    "Сбросить"
-                                } else {
-                                    "Выбрать все"
-                                },
+                                text = "Сбросить",
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
@@ -213,11 +200,16 @@ fun AddAppsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (selected.isNotEmpty()) {
+                Spacer(Modifier.weight(1f))
+                if (changed) {
                     Text(
-                        text = "Выбрано: ${selected.size}",
+                        text = "Изменено: ${additions.size + removals.size}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (removalOnly) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -236,13 +228,8 @@ fun AddAppsScreen(
                         }
                     }
 
-                    candidates.isEmpty() -> {
-                        EmptyAddState(
-                            allAdded = state.installed.isNotEmpty() &&
-                                state.installed.none { app ->
-                                    (!app.isSystem || systemVisible) &&
-                                        app.packageName !in tracked
-                                },
+                    apps.isEmpty() -> {
+                        EmptyAppsState(
                             hasQuery = query.isNotBlank(),
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
@@ -256,12 +243,12 @@ fun AddAppsScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(
-                                items = candidates,
+                                items = apps,
                                 key = { it.packageName }
                             ) { app ->
                                 AddAppRow(
                                     app = app,
-                                    selected = app.packageName in selected,
+                                    checked = app.packageName in draft,
                                     onClick = { toggle(app) }
                                 )
                             }
@@ -284,28 +271,39 @@ fun AddAppsScreen(
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
+                val scheme = MaterialTheme.colorScheme
                 PrimaryButton(
-                    text = if (selected.isEmpty()) {
-                        "Выберите приложения"
-                    } else {
-                        "Добавить ${pluralRu(selected.size, "приложение", "приложения", "приложений")}"
+                    text = when {
+                        additions.isNotEmpty() && removals.isNotEmpty() ->
+                            "Сохранить изменения"
+
+                        additions.isNotEmpty() -> "Добавить ${pluralRu(
+                            additions.size,
+                            "приложение",
+                            "приложения",
+                            "приложений"
+                        )}"
+
+                        removals.isNotEmpty() -> "Убрать ${pluralRu(
+                            removals.size,
+                            "приложение",
+                            "приложения",
+                            "приложений"
+                        )}"
+
+                        else -> "Нет изменений"
                     },
-                    onClick = {
-                        val allowed = if (state.settings.checkSystemApps) {
-                            selected
-                        } else {
-                            val systemPackages = state.installed
-                                .asSequence()
-                                .filter { it.isSystem }
-                                .map { it.packageName }
-                                .toHashSet()
-                            selected - systemPackages
-                        }
-                        onAdd(allowed)
-                    },
+                    onClick = { onApply(additions, removals) },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = selected.isNotEmpty(),
-                    icon = Icons.Rounded.Add
+                    enabled = changed,
+                    icon = when {
+                        additions.isNotEmpty() && removals.isNotEmpty() -> Icons.Rounded.Check
+                        additions.isNotEmpty() -> Icons.Rounded.Check
+                        removals.isNotEmpty() -> Icons.Rounded.Delete
+                        else -> Icons.Rounded.Check
+                    },
+                    containerColor = if (removalOnly) scheme.error else scheme.primary,
+                    contentColor = if (removalOnly) scheme.onError else scheme.onPrimary
                 )
             }
         }
@@ -315,13 +313,14 @@ fun AddAppsScreen(
 @Composable
 private fun AddAppRow(
     app: InstalledApp,
-    selected: Boolean,
-    onClick: () -> Unit
+    checked: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val scheme = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val background by rememberAnimatedColor(
-        targetValue = if (selected) {
+        targetValue = if (checked) {
             scheme.primaryContainer.copy(alpha = 0.65f)
         } else {
             scheme.surfaceContainerLow
@@ -330,7 +329,7 @@ private fun AddAppRow(
         label = "addRowBg"
     )
     val border by rememberAnimatedColor(
-        targetValue = if (selected) {
+        targetValue = if (checked) {
             scheme.primary.copy(alpha = 0.55f)
         } else {
             scheme.outlineVariant.copy(alpha = 0.4f)
@@ -340,7 +339,7 @@ private fun AddAppRow(
     )
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .clickable(
@@ -384,7 +383,7 @@ private fun AddAppRow(
                     .size(27.dp)
                     .clip(CircleShape)
                     .background(
-                        color = if (selected) {
+                        color = if (checked) {
                             scheme.primary
                         } else {
                             scheme.surfaceContainerHighest
@@ -394,7 +393,7 @@ private fun AddAppRow(
                 contentAlignment = Alignment.Center
             ) {
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = selected,
+                    visible = checked,
                     enter = fadeIn(tween(120)) + scaleIn(
                         initialScale = 0.4f,
                         animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f)
@@ -403,7 +402,7 @@ private fun AddAppRow(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Check,
-                        contentDescription = "Выбрано",
+                        contentDescription = "Отслеживается",
                         tint = scheme.onPrimary,
                         modifier = Modifier.size(17.dp)
                     )
@@ -414,8 +413,7 @@ private fun AddAppRow(
 }
 
 @Composable
-private fun EmptyAddState(
-    allAdded: Boolean,
+private fun EmptyAppsState(
     hasQuery: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -431,24 +429,20 @@ private fun EmptyAddState(
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            text = when {
-                hasQuery -> "Ничего не найдено"
-                allAdded -> "Все приложения уже добавлены"
-                else -> "Нет доступных приложений"
-            },
+            text = if (hasQuery) "Ничего не найдено" else "Нет доступных приложений",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = when {
-                hasQuery -> "Попробуйте изменить запрос."
-                allAdded -> "Новые приложения появятся здесь после установки."
-                else -> "Включите отображение системных приложений или установите новое приложение."
+            text = if (hasQuery) {
+                "Попробуйте изменить запрос."
+            } else {
+                "Включите отображение системных приложений или установите новое приложение."
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            textAlign = TextAlign.Center
         )
     }
 }

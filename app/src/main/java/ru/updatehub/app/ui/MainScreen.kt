@@ -69,7 +69,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -93,7 +92,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -210,7 +208,6 @@ fun MainScreen(
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val listState = rememberLazyListState()
-    val addFabTrigger = rememberPointOriginTrigger(onAdd)
 
     val installedMap = remember(state.installed) {
         state.installed.associateBy { it.packageName }
@@ -315,7 +312,7 @@ fun MainScreen(
                             start = 16.dp,
                             end = 16.dp,
                             top = 4.dp,
-                            bottom = 112.dp
+                            bottom = 32.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -417,6 +414,17 @@ fun MainScreen(
                         }
                     }
 
+                    if (rows.isNotEmpty() && allRows.size <= 10) {
+                        item(key = "addMore") {
+                            StaggeredAppear(index = visibleRows.size + 3) {
+                                AddMoreAppsCard(
+                                    trackedCount = allRows.size,
+                                    onAdd = onAdd
+                                )
+                            }
+                        }
+                    }
+
                     if (rows.isNotEmpty()) {
                         item(key = "footer") {
                             Text(
@@ -433,36 +441,6 @@ fun MainScreen(
                 }
             }
         }
-
-        ExtendedFloatingActionButton(
-            onClick = addFabTrigger.onClick,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .navigationBarsPadding()
-                .padding(18.dp)
-                .shadow(
-                    elevation = 10.dp,
-                    shape = RoundedCornerShape(18.dp),
-                    ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                )
-                .then(addFabTrigger.modifier),
-            shape = RoundedCornerShape(18.dp),
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            icon = {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = null
-                )
-            },
-            text = {
-                Text(
-                    text = "Добавить",
-                    style = MaterialTheme.typography.labelLarge
-                )
-            }
-        )
     }
 
     if (selectedRow != null) {
@@ -1792,6 +1770,83 @@ private fun NoCompatibleUpdatesState(onCheck: () -> Unit) {
                 Spacer(Modifier.width(7.dp))
                 Text("Проверить снова")
             }
+        }
+    }
+}
+
+@Composable
+private fun AddMoreAppsCard(
+    trackedCount: Int,
+    onAdd: () -> Unit
+) {
+    val haptics = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val trigger = rememberPointOriginTrigger(onAdd)
+    val scheme = MaterialTheme.colorScheme
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    trigger.onClick()
+                }
+            )
+            .pressScale(interaction)
+            .then(trigger.modifier),
+        shape = RoundedCornerShape(20.dp),
+        color = scheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, scheme.primary.copy(alpha = 0.28f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(scheme.primary.copy(alpha = 0.13f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = null,
+                    tint = scheme.primary,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Добавить ещё приложения",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = scheme.onSurface
+                )
+                Text(
+                    text = "Отслеживается ${pluralRu(
+                        trackedCount,
+                        "приложение",
+                        "приложения",
+                        "приложений"
+                    )} · нажмите, чтобы изменить список",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = scheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

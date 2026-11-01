@@ -2,6 +2,7 @@ package ru.updatehub.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -418,9 +419,21 @@ fun PrimaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    icon: ImageVector? = null
+    icon: ImageVector? = null,
+    containerColor: Color = MaterialTheme.colorScheme.primary,
+    contentColor: Color = MaterialTheme.colorScheme.onPrimary
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val animatedContainer by animateColorAsState(
+        targetValue = containerColor,
+        animationSpec = tween(220),
+        label = "primaryButtonContainer"
+    )
+    val animatedContent by animateColorAsState(
+        targetValue = contentColor,
+        animationSpec = tween(220),
+        label = "primaryButtonContent"
+    )
     Button(
         onClick = onClick,
         modifier = modifier
@@ -429,8 +442,8 @@ fun PrimaryButton(
         enabled = enabled,
         shape = RoundedCornerShape(17.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary
+            containerColor = animatedContainer,
+            contentColor = animatedContent
         ),
         contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
         interactionSource = interaction
