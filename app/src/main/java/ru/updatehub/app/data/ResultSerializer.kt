@@ -22,6 +22,14 @@ object ResultSerializer {
                             result.versions.forEach { put(it.toJson()) }
                         }
                     )
+                    if (result.sourceChecks.isNotEmpty()) {
+                        put(
+                            "sourceChecks",
+                            JSONArray().apply {
+                                result.sourceChecks.forEach { put(it.toJson()) }
+                            }
+                        )
+                    }
                 }
             )
         }
@@ -43,6 +51,12 @@ object ResultSerializer {
                             versionArray.optJSONObject(j)?.toStoreVersion()?.let(versions::add)
                         }
                     }
+                    val sourceChecks = mutableListOf<SourceCheck>()
+                    item.optJSONArray("sourceChecks")?.let { checkArray ->
+                        for (j in 0 until checkArray.length()) {
+                            checkArray.optJSONObject(j)?.toSourceCheck()?.let(sourceChecks::add)
+                        }
+                    }
                     put(
                         packageName,
                         AppUpdateResult(
@@ -55,12 +69,39 @@ object ResultSerializer {
                             versions = versions,
                             checkedAt = item.optLong("checkedAt"),
                             message = item.optString("message")
-                                .takeIf { it.isNotBlank() && it != "null" }
+                                .takeIf { it.isNotBlank() && it != "null" },
+                            sourceChecks = sourceChecks
                         )
                     )
                 }
             }
         }.getOrDefault(emptyMap())
+    }
+
+    private fun SourceCheck.toJson(): JSONObject = JSONObject().apply {
+        put("source", source.key)
+        put("status", status.name)
+        put("versionName", versionName ?: JSONObject.NULL)
+        put("message", message ?: JSONObject.NULL)
+        put("signatureVerified", signatureVerified ?: JSONObject.NULL)
+    }
+
+    private fun JSONObject.toSourceCheck(): SourceCheck? {
+        val source = UpdateSource.fromKey(optString("source")) ?: return null
+        val status = runCatching {
+            SourceCheckStatus.valueOf(optString("status"))
+        }.getOrDefault(SourceCheckStatus.NOT_CHECKED)
+        return SourceCheck(
+            source = source,
+            status = status,
+            versionName = optString("versionName").takeIf { it.isNotBlank() && it != "null" },
+            message = optString("message").takeIf { it.isNotBlank() && it != "null" },
+            signatureVerified = when {
+                isNull("signatureVerified") -> null
+                has("signatureVerified") -> optBoolean("signatureVerified")
+                else -> null
+            }
+        )
     }
 
     private fun StoreVersion.toJson(): JSONObject = JSONObject().apply {

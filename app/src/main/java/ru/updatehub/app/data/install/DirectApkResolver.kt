@@ -12,8 +12,11 @@ import ru.updatehub.app.data.checkers.ApkPureApi
 import java.util.concurrent.TimeUnit
 
 data class ApkDownloadSpec(
-    val source: UpdateSource,
-    val url: String
+    /** Null for UniStore's own GitHub release, which belongs to no store. */
+    val source: UpdateSource?,
+    val url: String,
+    /** Page used as Referer when the CDN expects a browser context. */
+    val pageUrl: String? = null
 )
 
 /**

@@ -1,5 +1,6 @@
 package ru.updatehub.app.data
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -88,5 +89,120 @@ class VersionRulesTest {
                 app("28.0.0.9905-gms", 9905L)
             )
         )
+    }
+
+    @Test
+    fun normalVersionIsAccepted() {
+        assertTrue(
+            VersionRules.isPlausible(
+                store("2.26.42.74", 264207400L),
+                app("2.26.41.77", 264207300L)
+            )
+        )
+        assertTrue(
+            VersionRules.isNewer(
+                store("2.26.42.74", 264207400L),
+                app("2.26.41.77", 264207300L)
+            )
+        )
+    }
+
+    @Test
+    fun chromeOsVersionIsRejected() {
+        // APKPure republishes ChromeOS builds in the same history list.
+        assertFalse(
+            VersionRules.isPlausible(
+                store("2000000000.0.0-CrOS", 2_000_000_000L),
+                app("2.74.88", 2074088L)
+            )
+        )
+        assertFalse(
+            VersionRules.isNewer(
+                store("2000000000.0.0-CrOS", 2_000_000_000L),
+                app("2.74.88", 2074088L)
+            )
+        )
+    }
+
+    @Test
+    fun junkVersionDoesNotBecomeAnUpdate() {
+        assertFalse(
+            VersionRules.isPlausible(
+                store("varies with device"),
+                app("2.74.88", 2074088L)
+            )
+        )
+        assertFalse(
+            VersionRules.isPlausible(
+                store("2.<html>"),
+                app("2.74.88", 2074088L)
+            )
+        )
+        assertFalse(
+            VersionRules.isNewer(
+                store("2.00000000", 2_000_000_000L),
+                app("2.74.88", 2074088L)
+            )
+        )
+    }
+
+    @Test
+    fun implausibleVersionJumpIsRejected() {
+        assertFalse(
+            VersionRules.isPlausible(
+                store("5000.0.0", 20_000L),
+                app("2.26.41.77", 264207300L)
+            )
+        )
+    }
+
+    @Test
+    fun staleStoreCheckStopsAdvertisingTheInstalledVersion() {
+        val installed = app("2.26.42.74", 264207400L)
+        val check = SourceCheck(
+            source = UpdateSource.GETAPPS,
+            status = SourceCheckStatus.UPDATE_FOUND,
+            versionName = "2.26.42.74"
+        )
+        val reconciled = VersionRules.reconcileSourceCheck(
+            check = check,
+            app = installed,
+            versions = listOf(store("2.26.42.74", 264207400L))
+        )
+        assertEquals(SourceCheckStatus.UP_TO_DATE, reconciled.status)
+        assertEquals("Не новее установленной версии", reconciled.message)
+    }
+
+    @Test
+    fun storeCheckBecomesIncompatibleWhenAndroidBlockedThatVersion() {
+        val installed = app("2.26.41.77", 264207300L)
+        val check = SourceCheck(
+            source = UpdateSource.GETAPPS,
+            status = SourceCheckStatus.UPDATE_FOUND,
+            versionName = "2.26.42.74"
+        )
+        val reconciled = VersionRules.reconcileSourceCheck(
+            check = check,
+            app = installed,
+            versions = listOf(store("2.26.42.74", 264207400L)),
+            isBlocked = { true }
+        )
+        assertEquals(SourceCheckStatus.INCOMPATIBLE, reconciled.status)
+    }
+
+    @Test
+    fun freshStoreCheckStaysAnUpdate() {
+        val installed = app("2.26.41.77", 264207300L)
+        val check = SourceCheck(
+            source = UpdateSource.GETAPPS,
+            status = SourceCheckStatus.UPDATE_FOUND,
+            versionName = "2.26.42.74"
+        )
+        val reconciled = VersionRules.reconcileSourceCheck(
+            check = check,
+            app = installed,
+            versions = listOf(store("2.26.42.74", 264207400L))
+        )
+        assertEquals(SourceCheckStatus.UPDATE_FOUND, reconciled.status)
     }
 }

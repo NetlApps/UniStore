@@ -33,6 +33,13 @@ class UpdateRepositoryTest {
         override suspend fun details(packageName: String): VersionDetails? = null
     }
 
+    private class FixedChecker(
+        override val source: UpdateSource,
+        private val outcome: CheckOutcome
+    ) : StoreChecker {
+        override suspend fun check(packageName: String): CheckOutcome = outcome
+    }
+
     private fun installed(signature: String?) = InstalledApp(
         packageName = "com.example.app",
         label = "Example",
@@ -116,5 +123,75 @@ class UpdateRepositoryTest {
 
         assertEquals(UpdateStatus.UPDATE_AVAILABLE, result.status)
         assertNotNull(result.best)
+    }
+
+    @Test
+    fun hiddenPlayVersionIsUnconfirmedInsteadOfUpToDate() = runBlocking {
+        val app = installed("0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9")
+        val checker = FixedChecker(UpdateSource.GOOGLE_PLAY, CheckOutcome.HiddenVersion)
+
+        val result = repository(checker).checkAll(
+            packages = setOf(app.packageName),
+            sources = setOf(UpdateSource.GOOGLE_PLAY),
+            installed = mapOf(app.packageName to app)
+        ).getValue(app.packageName)
+
+        assertEquals(UpdateStatus.UNCONFIRMED, result.status)
+        assertEquals(SourceCheckStatus.HIDDEN, result.sourceChecks.single().status)
+        assertTrue(result.message.orEmpty().contains("не публикует номер версии"))
+    }
+
+    @Test
+    fun hiddenPlayVersionDoesNotHideARealApkPureUpdate() = runBlocking {
+        val app = installed("0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9")
+        val repository = UpdateRepository(
+            checkers = listOf(
+                FixedChecker(UpdateSource.GOOGLE_PLAY, CheckOutcome.HiddenVersion),
+                FixedChecker(UpdateSource.APKPURE, CheckOutcome.Found("2.0.0"))
+            ),
+            deviceSdk = 35,
+            supportedAbis = listOf("arm64-v8a", "armeabi-v7a")
+        )
+
+        val result = repository.checkAll(
+            packages = setOf(app.packageName),
+            sources = setOf(UpdateSource.GOOGLE_PLAY, UpdateSource.APKPURE),
+            installed = mapOf(app.packageName to app)
+        ).getValue(app.packageName)
+
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, result.status)
+        assertEquals(UpdateSource.APKPURE, result.best?.source)
+        assertEquals(
+            SourceCheckStatus.UPDATE_FOUND,
+            result.sourceChecks.first { it.source == UpdateSource.APKPURE }.status
+        )
+        assertEquals(
+            SourceCheckStatus.HIDDEN,
+            result.sourceChecks.first { it.source == UpdateSource.GOOGLE_PLAY }.status
+        )
+    }
+
+    @Test
+    fun signatureMismatchIsReportedAsSuspiciousSource() = runBlocking {
+        val app = installed("aaaa000000000000000000000000000000000000000000000000000000000000")
+        val checker = FixedChecker(
+            UpdateSource.RUSTORE,
+            CheckOutcome.Found(
+                versionName = "9.0.0",
+                signature = "bbbb000000000000000000000000000000000000000000000000000000000000"
+            )
+        )
+
+        val result = repository(checker).checkAll(
+            packages = setOf(app.packageName),
+            sources = setOf(UpdateSource.RUSTORE),
+            installed = mapOf(app.packageName to app)
+        ).getValue(app.packageName)
+
+        assertEquals(UpdateStatus.UP_TO_DATE, result.status)
+        val check = result.sourceChecks.single()
+        assertEquals(SourceCheckStatus.SUSPICIOUS, check.status)
+        assertEquals(false, check.signatureVerified)
+        assertTrue(check.message.orEmpty().contains("Подпись"))
     }
 }

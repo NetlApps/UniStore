@@ -38,7 +38,18 @@ internal data class FetchRoute(
      * route can report missing and let the next route look in another
      * region or catalogue.
      */
-    val authoritative: Boolean = true
+    val authoritative: Boolean = true,
+    /**
+     * Keep this route ahead of the learned preference while it is available.
+     * APKPure's compact endpoint is much smaller than the history list, so a
+     * single history fallback must not push every following app onto it.
+     */
+    val alwaysFirst: Boolean = false,
+    /**
+     * Skip this route for the short cooldown after a timeout instead of
+     * paying its timeout again for every application in the same check.
+     */
+    val cooldownOnTimeout: Boolean = false
 )
 
 internal enum class RouteMethod { GET, HEAD, POST_FORM }
@@ -95,6 +106,7 @@ internal suspend fun <T> tryRoutes(
             }
         } catch (e: TimeoutCancellationException) {
             forgetRoute(route.name)
+            if (route.cooldownOnTimeout) coolDownRoute(route.name)
             sawFailure = true
             lastError = "${route.name}: тайм-аут"
             Log.w(TAG, "${route.name}: тайм-аут ${timeout} мс")
@@ -211,8 +223,15 @@ private fun orderRoutes(routes: List<FetchRoute>): List<FetchRoute> {
             preferred = route
         }
     }
-    val first = preferred ?: return available
-    return listOf(first) + available.filterNot { it.name == first.name }
+    val first = preferred
+    val ordered = if (first == null) {
+        available
+    } else {
+        listOf(first) + available.filterNot { it.name == first.name }
+    }
+    val pinned = ordered.filter { it.alwaysFirst }
+    if (pinned.isEmpty()) return ordered
+    return pinned + ordered.filterNot { it.alwaysFirst }
 }
 
 private fun rememberRoute(name: String) {

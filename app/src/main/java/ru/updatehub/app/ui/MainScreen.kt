@@ -54,6 +54,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
@@ -113,14 +114,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import ru.updatehub.app.data.AppUpdateResult
+import ru.updatehub.app.data.actionVersion
 import ru.updatehub.app.data.InstalledApp
 import ru.updatehub.app.data.Palette
 import ru.updatehub.app.data.SeasonalEffect
+import ru.updatehub.app.data.SourceCheckStatus
 import ru.updatehub.app.data.StoreConnection
 import ru.updatehub.app.data.StoreHealth
+import ru.updatehub.app.data.StoreVersion
 import ru.updatehub.app.data.UpdateInstallState
 import ru.updatehub.app.data.UpdateSource
 import ru.updatehub.app.data.UpdateStatus
+import ru.updatehub.app.data.VersionComparator
 import ru.updatehub.app.data.VersionRules
 import ru.updatehub.app.ui.components.AnimatedGlowBackground
 import ru.updatehub.app.ui.components.AppIcon
@@ -138,6 +143,7 @@ import ru.updatehub.app.ui.components.pluralRu
 import ru.updatehub.app.ui.theme.LocalReduceMotion
 import ru.updatehub.app.ui.theme.pressScale
 import ru.updatehub.app.ui.theme.rememberAnimatedColor
+import kotlin.math.roundToInt
 
 /** Always-blue "Обновление" badge, independent of the seasonal palette. */
 private val UpdateBadgeBlue = Color(0xFF2F6BFF)
@@ -170,6 +176,27 @@ private data class TrackedRow(
         result?.status == UpdateStatus.UPDATE_AVAILABLE &&
             app != null && VersionRules.isNewer(version, app)
     }
+
+    /**
+     * Newest version offered by [source], or the global best when no store is
+     * selected. The "Обновления по магазинам" tab must show what that exact
+     * store offers: another store may publish a newer build, but tapping
+     * "Обновить" there would install a different version than the card shows.
+     */
+    fun versionFrom(source: UpdateSource?): StoreVersion? {
+        if (source == null) {
+            if (result?.status != UpdateStatus.UPDATE_AVAILABLE) return null
+            return result.actionVersion(app)
+        }
+        val installed = app ?: return null
+        return result?.versions.orEmpty()
+            .filter { version ->
+                version.source == source && VersionRules.isNewer(version, installed)
+            }
+            .maxWithOrNull { first, second ->
+                VersionComparator.compare(first.versionName, second.versionName)
+            }
+    }
 }
 
 private enum class HeroState {
@@ -178,6 +205,7 @@ private enum class HeroState {
     ERROR,
     READY,
     ACTUAL,
+    UNCONFIRMED,
     NO_COMPATIBLE,
     EMPTY
 }
@@ -199,8 +227,10 @@ fun MainScreen(
     onMessage: (String) -> Unit,
     onRemove: (String) -> Unit,
     onSetFilter: (AppFilter) -> Unit,
+    onSelectStore: (UpdateSource) -> Unit,
     onRetry: () -> Unit,
     onUpdate: (String) -> Unit,
+    onUpdateFromStore: (String, UpdateSource) -> Unit,
     onOpenStore: (String, UpdateSource) -> Unit,
     onCancelInstall: (String) -> Unit,
     onUpdateAll: () -> Unit,
@@ -238,10 +268,11 @@ fun MainScreen(
                         UpdateStatus.UPDATE_AVAILABLE -> 0
                         UpdateStatus.INCOMPATIBLE -> 1
                         UpdateStatus.ERROR -> 2
-                        UpdateStatus.NOT_INSTALLED -> 3
-                        UpdateStatus.UNKNOWN -> 4
-                        UpdateStatus.UP_TO_DATE -> 5
-                        UpdateStatus.NOT_FOUND -> 6
+                        UpdateStatus.UNCONFIRMED -> 3
+                        UpdateStatus.NOT_INSTALLED -> 4
+                        UpdateStatus.UNKNOWN -> 5
+                        UpdateStatus.UP_TO_DATE -> 6
+                        UpdateStatus.NOT_FOUND -> 7
                     }
                 }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
             )
@@ -257,19 +288,99 @@ fun MainScreen(
     val updatesCount = rows.count { it.status == UpdateStatus.UPDATE_AVAILABLE }
     val actualCount = rows.count { it.status == UpdateStatus.UP_TO_DATE }
     val errorCount = rows.count { it.status == UpdateStatus.ERROR }
+    // Play hides the version for a few popular apps. They are neither
+    // "actual" nor "failed", and the hero must not round them away.
+    val unconfirmedCount = rows.count { it.status == UpdateStatus.UNCONFIRMED }
+
+    // The store tab answers "what can I update from this store", so it is
+    // built from per-source checks rather than from the single best version.
+    // A store that only publishes an older build is left out even when another
+    // store has an update.
+    val storeFilter = state.storeFilter
+    val storeRows = remember(rows, storeFilter) {
+        if (storeFilter == null) emptyList() else rows.filter { it.hasUpdateFrom(storeFilter) }
+    }
+    val storeActualCount = remember(rows, storeFilter) {
+        if (storeFilter == null) {
+            0
+        } else {
+            rows.count { it.isUpToDateIn(storeFilter) }
+        }
+    }
+    val storeErrorCount = remember(rows, storeFilter) {
+        if (storeFilter == null) {
+            0
+        } else {
+            rows.count { row ->
+                row.result?.sourceChecks?.any {
+                    it.source == storeFilter && it.status == SourceCheckStatus.UNAVAILABLE
+                } == true
+            }
+        }
+    }
+    val storeCheckedCount = remember(rows, storeFilter) {
+        if (storeFilter == null) {
+            0
+        } else {
+            rows.count { row ->
+                row.result?.sourceChecks?.any {
+                    it.source == storeFilter && it.status != SourceCheckStatus.NOT_CHECKED
+                } == true
+            }
+        }
+    }
+    val storeHiddenCount = remember(rows, storeFilter) {
+        if (storeFilter == null) {
+            0
+        } else {
+            rows.count { row ->
+                row.result?.sourceChecks?.any {
+                    it.source == storeFilter && it.status == SourceCheckStatus.HIDDEN
+                } == true
+            }
+        }
+    }
+    // A store can be enabled after the last full check, in which case it has
+    // no per-source results yet. "0 обновлений" would be an invented fact:
+    // the store simply was not asked.
+    val storeChecked = storeCheckedCount > 0
+    val storeMode = state.filter == AppFilter.STORES
+    val heroUpdatesCount = if (storeMode) storeRows.size else updatesCount
+    val heroActualCount = if (storeMode) storeActualCount else actualCount
+    val heroErrorCount = if (storeMode) storeErrorCount else errorCount
+    // One unavailable app must not turn the whole store into "Не удалось
+    // проверить". The store is shown as failed only when every checked app in
+    // it failed; a partial problem stays visible in the statistics row.
+    val allChecksFailed = if (storeMode) {
+        storeCheckedCount > 0 && storeErrorCount >= storeCheckedCount
+    } else {
+        rows.isNotEmpty() && errorCount == rows.size
+    }
 
     val visibleRows = when (state.filter) {
         AppFilter.ALL -> rows
         AppFilter.UPDATES -> rows.filter { it.status == UpdateStatus.UPDATE_AVAILABLE }
-        AppFilter.ACTUAL -> rows.filter { it.status == UpdateStatus.UP_TO_DATE }
+        AppFilter.STORES -> storeRows
+    }
+
+    // A remembered store opens with one tap. Tapping the already active tab
+    // changes it; the dialog keeps the previous choice selected.
+    var showStorePicker by remember { mutableStateOf(false) }
+    var storeHintDismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(state.filter, storeFilter) {
+        if (state.filter == AppFilter.STORES) storeHintDismissed = false
     }
 
     var selectedPackage by remember { mutableStateOf<String?>(null) }
     val selectedRow = selectedPackage?.let { pkg -> rows.firstOrNull { it.packageName == pkg } }
 
-    fun startUpdate(packageName: String) {
+    fun startUpdate(packageName: String, store: UpdateSource? = null) {
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-        onUpdate(packageName)
+        if (store != null) {
+            onUpdateFromStore(packageName, store)
+        } else {
+            onUpdate(packageName)
+        }
     }
 
     fun openStore(packageName: String, source: UpdateSource) {
@@ -325,8 +436,14 @@ fun MainScreen(
                             HeroCard(
                                 state = state,
                                 rows = rows,
-                                updatesCount = updatesCount,
-                                errorCount = errorCount,
+                                updatesCount = heroUpdatesCount,
+                                actualCount = heroActualCount,
+                                errorCount = heroErrorCount,
+                                allChecksFailed = allChecksFailed,
+                                storeChecked = if (storeMode) storeChecked else true,
+                                unconfirmedCount = if (storeMode) storeHiddenCount else unconfirmedCount,
+                                bulkUpdatesCount = if (storeMode) 0 else updatesCount,
+                                store = if (storeMode) storeFilter else null,
                                 hiddenIncompatibleCount = hiddenIncompatibleCount,
                                 onCheck = onCheck,
                                 onAdd = onAdd,
@@ -352,9 +469,33 @@ fun MainScreen(
                                 selected = state.filter,
                                 allCount = rows.size,
                                 updatesCount = updatesCount,
-                                actualCount = actualCount,
-                                onSelect = onSetFilter
+                                storeTitle = storeFilter?.title,
+                                onSelect = { filter ->
+                                    when {
+                                        filter != AppFilter.STORES -> onSetFilter(filter)
+                                        // Tapping the active tab changes the store.
+                                        state.filter == AppFilter.STORES ||
+                                            storeFilter == null -> showStorePicker = true
+                                        // Returning from "Все" keeps the choice.
+                                        else -> onSetFilter(AppFilter.STORES)
+                                    }
+                                }
                             )
+                        }
+                    }
+
+                    if (storeMode && storeFilter != null && !storeHintDismissed) {
+                        item(key = "storeHint") {
+                            StaggeredAppear(index = 3) {
+                                StoreRefreshHint(
+                                    store = storeFilter,
+                                    hasData = storeChecked,
+                                    lastCheckAt = state.settings.lastCheckAt,
+                                    isChecking = state.check.isChecking,
+                                    onCheck = onCheck,
+                                    onDismiss = { storeHintDismissed = true }
+                                )
+                            }
                         }
                     }
 
@@ -391,7 +532,13 @@ fun MainScreen(
                             item(key = "emptyFilter") {
                                 EmptyFilterState(
                                     filter = state.filter,
-                                    onReset = { onSetFilter(AppFilter.ALL) }
+                                    store = storeFilter,
+                                    storeChecked = storeChecked,
+                                    storeUnconfirmed = storeHiddenCount > 0,
+                                    isChecking = state.check.isChecking,
+                                    onReset = { onSetFilter(AppFilter.ALL) },
+                                    onChooseStore = { showStorePicker = true },
+                                    onCheck = onCheck
                                 )
                             }
                         }
@@ -407,9 +554,15 @@ fun MainScreen(
                                 ) {
                                     TrackedAppCard(
                                         row = row,
+                                        store = if (storeMode) storeFilter else null,
                                         installState = state.installStates[row.packageName],
                                         onOpen = { selectedPackage = row.packageName },
-                                        onUpdate = { startUpdate(row.packageName) },
+                                        onUpdate = {
+                                            startUpdate(
+                                                row.packageName,
+                                                if (storeMode) storeFilter else null
+                                            )
+                                        },
                                         onCancel = { onCancelInstall(row.packageName) },
                                         onRetry = onRetry
                                     )
@@ -469,11 +622,15 @@ fun MainScreen(
     if (selectedRow != null) {
         AppDetailsSheet(
             row = selectedRow,
+            store = if (storeMode) storeFilter else null,
             installState = state.installStates[selectedRow.packageName],
             onDismiss = { selectedPackage = null },
             onUpdate = {
                 selectedPackage = null
-                startUpdate(selectedRow.packageName)
+                startUpdate(
+                    selectedRow.packageName,
+                    if (storeMode) storeFilter else null
+                )
             },
             onOpenStore = { source ->
                 selectedPackage = null
@@ -490,6 +647,47 @@ fun MainScreen(
                 selectedPackage = null
                 onRetry()
             }
+        )
+    }
+
+    if (showStorePicker) {
+        val sources = UpdateSource.fromKeys(state.settings.enabledSources)
+        val counts = remember(sources, rows) {
+            sources.associateWith { source -> rows.count { it.hasUpdateFrom(source) } }
+        }
+        val checkedSources = remember(sources, rows) {
+            sources.filterTo(linkedSetOf()) { source ->
+                rows.any { row ->
+                    row.result?.sourceChecks?.any {
+                        it.source == source && it.status != SourceCheckStatus.NOT_CHECKED
+                    } == true
+                }
+            }
+        }
+        val hiddenSources = remember(sources, rows) {
+            sources.filterTo(linkedSetOf()) { source ->
+                rows.any { row ->
+                    row.result?.sourceChecks?.any {
+                        it.source == source && it.status == SourceCheckStatus.HIDDEN
+                    } == true
+                }
+            }
+        }
+        StorePickerDialog(
+            sources = sources,
+            selected = storeFilter,
+            updateCounts = counts,
+            checkedSources = checkedSources,
+            hiddenSources = hiddenSources,
+            onSelect = { source ->
+                showStorePicker = false
+                onSelectStore(source)
+            },
+            onOpenSettings = {
+                showStorePicker = false
+                onSettings(SettingsSection.SOURCES)
+            },
+            onDismiss = { showStorePicker = false }
         )
     }
 
@@ -664,7 +862,13 @@ private fun HeroCard(
     state: UiState,
     rows: List<TrackedRow>,
     updatesCount: Int,
+    actualCount: Int,
     errorCount: Int,
+    allChecksFailed: Boolean,
+    storeChecked: Boolean,
+    unconfirmedCount: Int,
+    bulkUpdatesCount: Int,
+    store: UpdateSource?,
     hiddenIncompatibleCount: Int,
     onCheck: () -> Unit,
     onAdd: () -> Unit,
@@ -684,9 +888,17 @@ private fun HeroCard(
         state.check.isChecking -> HeroState.CHECKING
         rows.isEmpty() && hiddenIncompatibleCount > 0 -> HeroState.NO_COMPATIBLE
         rows.isEmpty() -> HeroState.EMPTY
+        // A store tab is a view of the same tracked apps: zero updates there
+        // says nothing about other stores, so it must not claim "всё актуально"
+        // for the whole device.
+        store != null && updatesCount == 0 && allChecksFailed -> HeroState.ERROR
+        store != null && updatesCount == 0 && !storeChecked -> HeroState.READY
+        store != null && updatesCount == 0 && unconfirmedCount > 0 -> HeroState.UNCONFIRMED
+        store != null && updatesCount == 0 -> HeroState.ACTUAL
         updatesCount > 0 -> HeroState.UPDATES
-        rows.isNotEmpty() && errorCount == rows.size -> HeroState.ERROR
+        allChecksFailed -> HeroState.ERROR
         state.settings.lastCheckAt == 0L -> HeroState.READY
+        unconfirmedCount > 0 -> HeroState.UNCONFIRMED
         else -> HeroState.ACTUAL
     }
 
@@ -780,10 +992,13 @@ private fun HeroCard(
                 }
                 Spacer(Modifier.width(9.dp))
                 Text(
-                    text = "ПРОВЕРКА ОБНОВЛЕНИЙ",
+                    text = store?.let { "ОБНОВЛЕНИЯ: ${it.title.uppercase()}" }
+                        ?: "ПРОВЕРКА ОБНОВЛЕНИЙ",
                     style = MaterialTheme.typography.labelSmall,
                     color = heroColors.content.copy(alpha = 0.78f),
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -821,8 +1036,20 @@ private fun HeroCard(
                             )
 
                             HeroState.ERROR -> "Не удалось проверить"
-                            HeroState.READY -> "Готовы проверить"
-                            HeroState.ACTUAL -> "Всё актуально"
+                            HeroState.READY -> if (store != null) {
+                                "Проверим ${store.title}"
+                            } else {
+                                "Готовы проверить"
+                            }
+
+                            HeroState.ACTUAL -> if (store != null) {
+                                "Обновлений нет"
+                            } else {
+                                "Всё актуально"
+                            }
+
+                            HeroState.UNCONFIRMED -> "Нужна проверка"
+
                             HeroState.NO_COMPATIBLE -> "Нет совместимых обновлений"
                             HeroState.EMPTY -> "Начните с приложений"
                         },
@@ -842,10 +1069,36 @@ private fun HeroCard(
                                 }
                             }
 
-                            HeroState.UPDATES -> "Для ${pluralRu(updatesCount, "приложения", "приложений", "приложений")} есть новые версии"
-                            HeroState.ERROR -> "Проверьте подключение к интернету и попробуйте снова"
-                            HeroState.READY -> "Узнайте, какие приложения можно обновить"
-                            HeroState.ACTUAL -> "Последняя проверка ${formatLastCheck(state.settings.lastCheckAt)}"
+                            HeroState.UPDATES -> if (store != null) {
+                                "Доступны в ${store.title}"
+                            } else {
+                                "Для ${pluralRu(updatesCount, "приложения", "приложений", "приложений")} есть новые версии"
+                            }
+
+                            HeroState.ERROR -> if (store != null) {
+                                "Не удалось проверить ${store.title}"
+                            } else {
+                                "Проверьте подключение к интернету и попробуйте снова"
+                            }
+
+                            HeroState.READY -> if (store != null) {
+                                "Сведений этого магазина ещё нет. Обновите проверку, чтобы увидеть его обновления."
+                            } else {
+                                "Узнайте, какие приложения можно обновить"
+                            }
+
+                            HeroState.ACTUAL -> if (store != null) {
+                                "В ${store.title} нет новых версий. Обновите сведения, если проверка была давно."
+                            } else {
+                                "Последняя проверка ${formatLastCheck(state.settings.lastCheckAt)}"
+                            }
+                            HeroState.UNCONFIRMED -> if (store != null) {
+                                "Магазин не публикует номер версии — проверьте обновление вручную"
+                            } else {
+                                "Без номера версии: $unconfirmedCount — проверьте эти " +
+                                    "приложения в магазинах"
+                            }
+
                             HeroState.NO_COMPATIBLE ->
                                 "Магазины предлагают только версии, несовместимые с этим телефоном"
 
@@ -860,32 +1113,51 @@ private fun HeroCard(
             }
 
             if (rows.isNotEmpty()) {
-                val actualCount = rows.count { it.status == UpdateStatus.UP_TO_DATE }
+                // Zero is a real count only after this store was asked. Before
+                // that, a dash avoids presenting "0 актуальны" as a fact.
+                val statsKnown = store == null || storeChecked
                 Spacer(Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     HeroStat(
-                        value = updatesCount.toString(),
+                        value = if (statsKnown) updatesCount.toString() else "—",
                         label = "обновления",
                         modifier = Modifier.weight(1f),
-                        highlight = updatesCount > 0,
+                        highlight = statsKnown && updatesCount > 0,
                         contentColor = heroColors.content
                     )
                     HeroStat(
-                        value = actualCount.toString(),
+                        value = if (statsKnown) actualCount.toString() else "—",
                         label = "актуальны",
                         modifier = Modifier.weight(1f),
                         contentColor = heroColors.content
                     )
                     HeroStat(
-                        value = errorCount.toString(),
+                        value = if (statsKnown) errorCount.toString() else "—",
                         label = "ошибки",
                         modifier = Modifier.weight(1f),
-                        highlight = errorCount > 0,
+                        highlight = statsKnown && errorCount > 0,
                         contentColor = heroColors.content
                     )
+                }
+                if (unconfirmedCount > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Info,
+                            contentDescription = null,
+                            tint = heroColors.content.copy(alpha = 0.8f),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = "Не подтверждено: $unconfirmedCount",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = heroColors.content.copy(alpha = 0.8f)
+                        )
+                    }
                 }
             }
 
@@ -971,7 +1243,7 @@ private fun HeroCard(
                 )
             }
 
-            if (updatesCount > 0 && !state.check.isChecking) {
+            if (bulkUpdatesCount > 0 && !state.check.isChecking) {
                 Spacer(Modifier.height(12.dp))
                 val bulk = state.bulk
                 val updateAllInteraction = remember { MutableInteractionSource() }
@@ -1244,13 +1516,13 @@ private fun FilterBar(
     selected: AppFilter,
     allCount: Int,
     updatesCount: Int,
-    actualCount: Int,
+    storeTitle: String?,
     onSelect: (AppFilter) -> Unit
 ) {
     val tabs = listOf(
         Triple(AppFilter.ALL, "Все", allCount),
         Triple(AppFilter.UPDATES, "Обновления", updatesCount),
-        Triple(AppFilter.ACTUAL, "Актуальные", actualCount)
+        Triple(AppFilter.STORES, storeTitle ?: "По магазинам", 0)
     )
     val selectedIndex = tabs.indexOfFirst { it.first == selected }.coerceAtLeast(0)
 
@@ -1323,6 +1595,7 @@ private fun FilterBar(
 @Composable
 private fun TrackedAppCard(
     row: TrackedRow,
+    store: UpdateSource?,
     installState: UpdateInstallState?,
     onOpen: () -> Unit,
     onUpdate: () -> Unit,
@@ -1331,6 +1604,7 @@ private fun TrackedAppCard(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val scheme = MaterialTheme.colorScheme
+    val displayVersion = row.versionFrom(store)
     val busy = installState.isBusy()
     val hasUpdate = row.status == UpdateStatus.UPDATE_AVAILABLE
     val cardColor = if (hasUpdate) {
@@ -1397,7 +1671,7 @@ private fun TrackedAppCard(
                         RowStatusPill(row = row)
                     }
                     Spacer(Modifier.height(4.dp))
-                    VersionLine(row = row)
+                    VersionLine(row = row, version = displayVersion)
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val installText = installState.installStatusText()
@@ -1413,8 +1687,8 @@ private fun TrackedAppCard(
                                 overflow = TextOverflow.Ellipsis
                             )
 
-                            row.status == UpdateStatus.UPDATE_AVAILABLE && row.best != null ->
-                                SourceBadge(source = row.best!!.source)
+                            row.status == UpdateStatus.UPDATE_AVAILABLE && displayVersion != null ->
+                                SourceBadge(source = displayVersion.source)
 
                             else -> Text(
                                 text = when (row.status) {
@@ -1425,6 +1699,9 @@ private fun TrackedAppCard(
                                     UpdateStatus.NOT_FOUND -> "Нет в выбранных источниках"
                                     UpdateStatus.NOT_INSTALLED -> "Приложение не установлено"
                                     UpdateStatus.UNKNOWN -> "Ещё не проверяли"
+                                    UpdateStatus.UNCONFIRMED ->
+                                        row.result?.message ?: "Магазин не сообщает версию"
+
                                     UpdateStatus.UP_TO_DATE ->
                                         row.result?.message ?: "Установлена последняя версия"
 
@@ -1530,6 +1807,15 @@ private fun TrackedAppCard(
                         }
                     }
 
+                    row.status == UpdateStatus.UNCONFIRMED -> {
+                        Icon(
+                            imageVector = Icons.Rounded.Info,
+                            contentDescription = "Версия не подтверждена",
+                            tint = scheme.tertiary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
                     row.status == UpdateStatus.NOT_FOUND -> {
                         Icon(
                             imageVector = Icons.Rounded.Info,
@@ -1573,10 +1859,24 @@ private fun UpdateInstallState?.isCancellable(): Boolean =
         this is UpdateInstallState.Verifying ||
         this is UpdateInstallState.Ready
 
+@Composable
 private fun UpdateInstallState?.installStatusText(): String? = when (this) {
     is UpdateInstallState.Resolving -> "Получаем ссылку на APK…"
     is UpdateInstallState.Downloading -> {
-        val percent = progress?.let { " ${(it * 100).toInt()}%" }.orEmpty()
+        // The transfer reports bytes in chunks. Interpolating the fraction
+        // keeps the visible percentage moving smoothly between reports.
+        val animated by animateFloatAsState(
+            targetValue = progress ?: 0f,
+            animationSpec = if (LocalReduceMotion.current) {
+                snap()
+            } else {
+                tween(durationMillis = 420, easing = LinearEasing)
+            },
+            label = "downloadStatusPercent"
+        )
+        val percent = progress
+            ?.let { " ${(animated * 100f).roundToInt().coerceIn(0, 100)}%" }
+            .orEmpty()
         "Скачивание$percent"
     }
 
@@ -1591,6 +1891,16 @@ private fun UpdateInstallState?.installStatusText(): String? = when (this) {
 @Composable
 private fun InstallBusyButton(state: UpdateInstallState?) {
     val scheme = MaterialTheme.colorScheme
+    val downloadProgress = (state as? UpdateInstallState.Downloading)?.progress
+    val animatedPercent by animateFloatAsState(
+        targetValue = downloadProgress ?: 0f,
+        animationSpec = if (LocalReduceMotion.current) {
+            snap()
+        } else {
+            tween(durationMillis = 420, easing = LinearEasing)
+        },
+        label = "installButtonPercent"
+    )
     FilledTonalButton(
         onClick = {},
         enabled = false,
@@ -1616,7 +1926,9 @@ private fun InstallBusyButton(state: UpdateInstallState?) {
         Text(
             text = when (state) {
                 is UpdateInstallState.Downloading ->
-                    state.progress?.let { "${(it * 100).toInt()}%" } ?: "Загрузка"
+                    downloadProgress?.let {
+                        "${(animatedPercent * 100f).roundToInt().coerceIn(0, 100)}%"
+                    } ?: "Загрузка"
 
                 is UpdateInstallState.Verifying -> "Проверка"
                 is UpdateInstallState.Ready -> "В очереди"
@@ -1631,13 +1943,22 @@ private fun InstallBusyButton(state: UpdateInstallState?) {
 @Composable
 private fun DownloadProgress(state: UpdateInstallState.Downloading) {
     val progress = state.progress
+    val animated by animateFloatAsState(
+        targetValue = progress ?: 0f,
+        animationSpec = if (LocalReduceMotion.current) {
+            snap()
+        } else {
+            tween(durationMillis = 420, easing = LinearEasing)
+        },
+        label = "downloadBarProgress"
+    )
     val modifier = Modifier
         .fillMaxWidth()
         .height(4.dp)
         .clip(CircleShape)
     if (progress != null) {
         LinearProgressIndicator(
-            progress = { progress },
+            progress = { animated },
             modifier = modifier,
             strokeCap = StrokeCap.Round
         )
@@ -1696,6 +2017,12 @@ private fun RowStatusPill(row: TrackedRow) {
             icon = Icons.Rounded.ErrorOutline
         )
 
+        UpdateStatus.UNCONFIRMED -> StatusPill(
+            text = "Не подтверждено",
+            color = MaterialTheme.colorScheme.tertiary,
+            icon = Icons.Rounded.Info
+        )
+
         UpdateStatus.UNKNOWN -> StatusPill(
             text = "Не проверено",
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1704,9 +2031,9 @@ private fun RowStatusPill(row: TrackedRow) {
 }
 
 @Composable
-private fun VersionLine(row: TrackedRow) {
+private fun VersionLine(row: TrackedRow, version: StoreVersion?) {
     val scheme = MaterialTheme.colorScheme
-    val best = row.best
+    val best = version
     if (row.status == UpdateStatus.UPDATE_AVAILABLE && best != null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -2011,14 +2338,28 @@ private fun EmptyIllustration() {
 }
 
 @Composable
-private fun EmptyFilterState(filter: AppFilter, onReset: () -> Unit) {
+private fun EmptyFilterState(
+    filter: AppFilter,
+    store: UpdateSource?,
+    storeChecked: Boolean,
+    storeUnconfirmed: Boolean,
+    isChecking: Boolean,
+    onReset: () -> Unit,
+    onChooseStore: () -> Unit,
+    onCheck: () -> Unit
+) {
+    val storeNotChecked = filter == AppFilter.STORES && store != null && !storeChecked
+    val storeHidden = filter == AppFilter.STORES && store != null && storeUnconfirmed
     SectionCard(contentPadding = PaddingValues(22.dp)) {
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
-                imageVector = if (filter == AppFilter.UPDATES) {
+                imageVector = if (!storeNotChecked && !storeHidden &&
+                    (filter == AppFilter.UPDATES ||
+                        (filter == AppFilter.STORES && store != null))
+                ) {
                     Icons.Rounded.CheckCircle
                 } else {
                     Icons.Rounded.Info
@@ -2029,27 +2370,230 @@ private fun EmptyFilterState(filter: AppFilter, onReset: () -> Unit) {
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = if (filter == AppFilter.UPDATES) "Обновлений нет" else "Здесь пока пусто",
+                text = when {
+                    filter == AppFilter.STORES && store == null -> "Магазин не выбран"
+                    storeNotChecked -> "Сведений ${store?.title} ещё нет"
+                    storeHidden -> "Нужна проверка"
+                    filter == AppFilter.STORES -> "В ${store?.title} обновлений нет"
+                    filter == AppFilter.UPDATES -> "Обновлений нет"
+                    else -> "Здесь пока пусто"
+                },
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
             Text(
-                text = if (filter == AppFilter.UPDATES) {
-                    "Все отслеживаемые приложения уже обновлены."
-                } else {
-                    "В этой категории пока нет приложений."
+                text = when {
+                    filter == AppFilter.STORES && store == null ->
+                        "Выберите магазин, чтобы увидеть его обновления."
+
+                    storeNotChecked ->
+                        "Запустите проверку, чтобы узнать, какие приложения " +
+                            "можно обновить из этого магазина."
+
+                    storeHidden ->
+                        "Магазин не публикует номер версии — проверьте обновление вручную."
+
+                    filter == AppFilter.STORES ->
+                        "Другие магазины могут предлагать новые версии. " +
+                            "Обновите сведения, если проверка была давно."
+
+                    filter == AppFilter.UPDATES ->
+                        "Все отслеживаемые приложения уже обновлены."
+
+                    else -> "В этой категории пока нет приложений."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
             Spacer(Modifier.height(10.dp))
-            TextButton(onClick = onReset) {
-                Text("Показать все")
+            when {
+                storeNotChecked || storeHidden ->
+                    TextButton(onClick = onCheck, enabled = !isChecking) {
+                        Text(if (isChecking) "Проверяем…" else "Проверить")
+                    }
+
+                filter == AppFilter.STORES -> TextButton(onClick = onChooseStore) {
+                    Text("Выбрать магазин")
+                }
+
+                else -> TextButton(onClick = onReset) {
+                    Text("Показать все")
+                }
             }
         }
     }
 }
+
+@Composable
+private fun StoreRefreshHint(
+    store: UpdateSource,
+    hasData: Boolean,
+    lastCheckAt: Long,
+    isChecking: Boolean,
+    onCheck: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = scheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.45f))
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SourceLogo(source = store, size = 26.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (hasData && lastCheckAt > 0L) {
+                        "Сведения ${store.title} обновлены ${formatLastCheck(lastCheckAt)}"
+                    } else {
+                        "Сведения ${store.title} ещё не загружены"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = scheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Обновить сведения перед обновлением?",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onCheck, enabled = !isChecking) {
+                Text(if (isChecking) "Проверяем…" else "Обновить")
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Скрыть подсказку",
+                    tint = scheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StorePickerDialog(
+    sources: List<UpdateSource>,
+    selected: UpdateSource?,
+    updateCounts: Map<UpdateSource, Int>,
+    checkedSources: Set<UpdateSource>,
+    hiddenSources: Set<UpdateSource>,
+    onSelect: (UpdateSource) -> Unit,
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Выберите магазин") },
+        text = {
+            if (sources.isEmpty()) {
+                Text(
+                    "В настройках не включён ни один магазин. Включите хотя бы один " +
+                        "источник обновлений."
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    sources.forEach { source ->
+                        val count = updateCounts[source] ?: 0
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelect(source) }
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SourceLogo(source = source, size = 30.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = source.title,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = when {
+                                        count > 0 -> "Обновлений: $count"
+                                        source in hiddenSources -> "Версия не подтверждена"
+                                        source in checkedSources -> "Обновлений нет"
+                                        else -> "Ещё не проверялся"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (source == selected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "Выбран",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (sources.isEmpty()) {
+                TextButton(onClick = onOpenSettings) {
+                    Text("Настройки магазинов")
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text("Отмена")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SourceCheckStatus.tint(): Color {
+    val scheme = MaterialTheme.colorScheme
+    return when (this) {
+        SourceCheckStatus.UPDATE_FOUND -> scheme.primary
+        SourceCheckStatus.UP_TO_DATE -> scheme.secondary
+        SourceCheckStatus.NOT_FOUND,
+        SourceCheckStatus.NOT_CHECKED -> scheme.onSurfaceVariant
+
+        SourceCheckStatus.UNAVAILABLE,
+        SourceCheckStatus.SUSPICIOUS,
+        SourceCheckStatus.INCOMPATIBLE -> scheme.error
+
+        SourceCheckStatus.HIDDEN -> scheme.tertiary
+    }
+}
+
+private fun TrackedRow.hasUpdateFrom(source: UpdateSource): Boolean {
+    val result = result ?: return false
+    val app = app ?: return false
+    if (result.sourceChecks.any {
+            it.source == source && it.status == SourceCheckStatus.UPDATE_FOUND
+        }
+    ) {
+        return true
+    }
+    // Results saved before per-store checks existed only keep versions that
+    // were actually returned by a store.
+    return result.versions.any { it.source == source && VersionRules.isNewer(it, app) }
+}
+
+private fun TrackedRow.isUpToDateIn(source: UpdateSource): Boolean =
+    result?.sourceChecks?.any {
+        it.source == source && it.status == SourceCheckStatus.UP_TO_DATE
+    } == true
 
 @Composable
 private fun ShimmerTrackedCard(index: Int) {
@@ -2087,6 +2631,7 @@ private fun ShimmerTrackedCard(index: Int) {
 @Composable
 private fun AppDetailsSheet(
     row: TrackedRow,
+    store: UpdateSource?,
     installState: UpdateInstallState?,
     onDismiss: () -> Unit,
     onUpdate: () -> Unit,
@@ -2113,7 +2658,7 @@ private fun AppDetailsSheet(
         label = "detailsIconAlpha"
     )
     LaunchedEffect(Unit) { sheetEntered = true }
-    val best = row.best
+    val best = row.versionFrom(store)
     val result = row.result
     val versions = result?.versions.orEmpty()
     val app = row.app
@@ -2201,12 +2746,14 @@ private fun AppDetailsSheet(
                     title = when {
                         row.status == UpdateStatus.INCOMPATIBLE -> "Несовместимо"
                         newerVersion != null -> "Доступно"
+                        row.status == UpdateStatus.UNCONFIRMED -> "Не подтверждено"
                         else -> "Актуально"
                     },
                     version = newerVersion?.versionName ?: row.installedVersion.ifBlank { "—" },
                     color = when {
                         row.status == UpdateStatus.INCOMPATIBLE -> scheme.error
                         newerVersion != null -> scheme.primary
+                        row.status == UpdateStatus.UNCONFIRMED -> scheme.tertiary
                         else -> scheme.onSurface
                     },
                     modifier = Modifier.weight(1f),
@@ -2311,10 +2858,53 @@ private fun AppDetailsSheet(
                 }
             }
 
-            if (availableVersions.isNotEmpty()) {
+            if (row.status == UpdateStatus.UNCONFIRMED) {
+                Spacer(Modifier.height(12.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(scheme.tertiaryContainer.copy(alpha = 0.45f))
+                        .padding(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Info,
+                            contentDescription = null,
+                            tint = scheme.tertiary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = result?.message
+                                ?: "Магазин не публикует номер версии, поэтому обновление нельзя подтвердить.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onTertiaryContainer
+                        )
+                    }
+                    val hiddenStore = result?.sourceChecks
+                        ?.firstOrNull { it.status == SourceCheckStatus.HIDDEN }
+                        ?.source
+                    if (hiddenStore != null) {
+                        TextButton(
+                            onClick = { onOpenStore(hiddenStore) },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "Проверить в ${hiddenStore.title}",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (availableVersions.isNotEmpty() ||
+                result?.sourceChecks?.isNotEmpty() == true
+            ) {
                 Spacer(Modifier.height(20.dp))
                 Text(
-                    text = "Найдено в источниках",
+                    text = "Где можно обновить",
                     style = MaterialTheme.typography.titleSmall,
                     color = scheme.onSurface
                 )
@@ -2325,35 +2915,107 @@ private fun AppDetailsSheet(
                         .clip(RoundedCornerShape(18.dp))
                         .background(scheme.surfaceContainer)
                 ) {
-                    availableVersions.forEachIndexed { index, version ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(horizontal = 14.dp),
-                                color = scheme.outlineVariant.copy(alpha = 0.4f)
-                            )
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 11.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            SourceLogo(source = version.source, size = 32.dp)
-                            Spacer(Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = version.source.title,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = scheme.onSurface
-                                )
-                                Text(
-                                    text = "Версия ${version.versionName}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = scheme.onSurfaceVariant
+                    val checks = result?.sourceChecks.orEmpty()
+                    if (checks.isNotEmpty()) {
+                        checks.forEachIndexed { index, check ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 14.dp),
+                                    color = scheme.outlineVariant.copy(alpha = 0.4f)
                                 )
                             }
-                            TextButton(onClick = { onOpenStore(version.source) }) {
-                                Text("В магазине")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                SourceLogo(source = check.source, size = 32.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = check.source.title,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = scheme.onSurface
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = check.status.title,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = check.status.tint()
+                                        )
+                                    }
+                                    check.versionName?.let { versionName ->
+                                        Text(
+                                            text = "Версия $versionName",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = scheme.onSurfaceVariant
+                                        )
+                                    }
+                                    when (check.signatureVerified) {
+                                        true -> Text(
+                                            text = "Подпись совпадает",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = scheme.secondary
+                                        )
+
+                                        false -> Text(
+                                            text = "Подпись не совпадает",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = scheme.error
+                                        )
+
+                                        null -> Unit
+                                    }
+                                    check.message?.let { message ->
+                                        Text(
+                                            text = message,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = scheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                if (check.status == SourceCheckStatus.UPDATE_FOUND) {
+                                    TextButton(onClick = { onOpenStore(check.source) }) {
+                                        Text("В магазине")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        availableVersions.forEachIndexed { index, version ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 14.dp),
+                                    color = scheme.outlineVariant.copy(alpha = 0.4f)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                SourceLogo(source = version.source, size = 32.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = version.source.title,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = scheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Версия ${version.versionName}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = scheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(onClick = { onOpenStore(version.source) }) {
+                                    Text("В магазине")
+                                }
                             }
                         }
                     }

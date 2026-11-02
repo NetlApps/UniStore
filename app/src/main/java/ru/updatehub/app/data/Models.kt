@@ -427,12 +427,40 @@ data class AppSettings(
     val resultsJson: String = "",
     val checkSystemApps: Boolean = false,
     /** `package|version` pairs that Android refused to install on this device. */
-    val incompatibleUpdates: Set<String> = emptySet()
+    val incompatibleUpdates: Set<String> = emptySet(),
+    /** Store whose updates are shown on the "Обновления по магазинам" tab. */
+    val storeFilterKey: String = ""
 )
 
-/** Stable key for a store version that cannot be installed on this device. */
-fun incompatibleUpdateKey(packageName: String, versionName: String): String =
+/**
+ * Stable key for a store version that cannot be installed on this device.
+ *
+ * The store is part of the key because the same version can be packaged
+ * differently: an APKPure XAPK may fail while Google Play installs its own
+ * build of that version fine. Keys saved by older builds have no store part
+ * and deliberately keep matching every source.
+ */
+fun incompatibleUpdateKey(
+    packageName: String,
+    versionName: String,
+    source: UpdateSource? = null
+): String = if (source == null) {
     "$packageName|$versionName"
+} else {
+    "$packageName|$versionName|${source.key}"
+}
+
+/** True when this exact package/version from [source] was rejected earlier. */
+fun isIncompatibleUpdate(
+    keys: Set<String>,
+    packageName: String,
+    versionName: String,
+    source: UpdateSource?
+): Boolean {
+    if ("$packageName|$versionName" in keys) return true
+    return source != null &&
+        incompatibleUpdateKey(packageName, versionName, source) in keys
+}
 
 enum class UpdateStatus {
     UPDATE_AVAILABLE,
@@ -441,8 +469,41 @@ enum class UpdateStatus {
     NOT_FOUND,
     ERROR,
     NOT_INSTALLED,
+
+    /**
+     * At least one enabled source could not reveal the current version (for
+     * example, Google Play hides WhatsApp's version), so "актуально" would be
+     * a guess. The app may still have an update in that store.
+     */
+    UNCONFIRMED,
     UNKNOWN
 }
+
+/** Result of checking one concrete store for one application. */
+enum class SourceCheckStatus(val title: String) {
+    UPDATE_FOUND("Есть обновление"),
+    UP_TO_DATE("Актуально"),
+    NOT_FOUND("Нет в каталоге"),
+    UNAVAILABLE("Недоступен"),
+    HIDDEN("Версия скрыта"),
+    SUSPICIOUS("Версия отклонена"),
+    INCOMPATIBLE("Несовместимо"),
+    NOT_CHECKED("Не проверялся")
+}
+
+/**
+ * Per-store summary kept with a check result. Unlike [StoreVersion] it also
+ * records sources that found nothing or failed, so the app card can explain
+ * where an update could come from instead of silently omitting a store.
+ */
+data class SourceCheck(
+    val source: UpdateSource,
+    val status: SourceCheckStatus,
+    val versionName: String? = null,
+    val message: String? = null,
+    /** Whether the store exposed a certificate hash that matched the app. */
+    val signatureVerified: Boolean? = null
+)
 
 /** Three-state connection quality shown next to every store. */
 enum class StoreConnection {
@@ -537,5 +598,44 @@ data class AppUpdateResult(
     val best: StoreVersion? = null,
     val versions: List<StoreVersion> = emptyList(),
     val checkedAt: Long = 0L,
-    val message: String? = null
+    val message: String? = null,
+    /** One entry per enabled source, including sources without an update. */
+    val sourceChecks: List<SourceCheck> = emptyList()
 )
+
+/**
+ * Version the single "Обновить" button acts on. A direct-download store wins
+ * because it installs without leaving the app; when no such store has a newer
+ * build, the best catalog version is returned as a store-redirect target.
+ *
+ * The card, details sheet and update action all use this value so the shown
+ * version and source always match what will actually be installed.
+ */
+fun AppUpdateResult.actionVersion(app: InstalledApp?): StoreVersion? {
+    if (app == null) return null
+    val newer = versions.filter { VersionRules.isNewer(it, app) }
+    val direct = newer
+        .filter { it.source.supportsDirectDownload }
+        .maxWithOrNull { first, second -> compareStoreVersions(first, second) }
+    return direct
+        ?: best?.takeIf { VersionRules.isNewer(it, app) }
+        ?: newer.maxWithOrNull { first, second -> compareStoreVersions(first, second) }
+}
+
+/** Direct-download-only counterpart used by the bulk "Обновить всё" flow. */
+fun AppUpdateResult.directVersion(app: InstalledApp?): StoreVersion? {
+    if (app == null) return null
+    return versions
+        .filter { it.source.supportsDirectDownload && VersionRules.isNewer(it, app) }
+        .maxWithOrNull { first, second -> compareStoreVersions(first, second) }
+}
+
+private fun compareStoreVersions(first: StoreVersion, second: StoreVersion): Int {
+    val byVersion = VersionComparator.compare(first.versionName, second.versionName)
+    return if (byVersion != 0) {
+        byVersion
+    } else {
+        UpdateSource.entries.indexOf(second.source) -
+            UpdateSource.entries.indexOf(first.source)
+    }
+}

@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import ru.updatehub.app.UpdateHubApp
+import ru.updatehub.app.data.UpdateSource
 import ru.updatehub.app.notifications.Notifications
 
 /** Result of a PackageInstaller session, consumed by the running UI. */
@@ -18,7 +19,8 @@ data class ApkInstallEvent(
     val success: Boolean,
     val message: String? = null,
     val incompatible: Boolean = false,
-    val versionName: String? = null
+    val versionName: String? = null,
+    val source: UpdateSource? = null
 )
 
 object ApkInstallEvents {
@@ -46,6 +48,7 @@ class ApkInstallReceiver : BroadcastReceiver() {
     private fun handleInstallStatus(context: Context, intent: Intent) {
         val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: return
         val versionName = intent.getStringExtra(EXTRA_VERSION_NAME).orEmpty()
+        val source = UpdateSource.fromKey(intent.getStringExtra(EXTRA_SOURCE_KEY))
         val status = intent.getIntExtra(
             PackageInstaller.EXTRA_STATUS,
             PackageInstaller.STATUS_FAILURE
@@ -56,7 +59,12 @@ class ApkInstallReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_SUCCESS -> {
                 deleteDownloadedPackage(context, packageName)
                 ApkInstallEvents.events.tryEmit(
-                    ApkInstallEvent(packageName = packageName, success = true)
+                    ApkInstallEvent(
+                        packageName = packageName,
+                        success = true,
+                        versionName = versionName.takeIf { it.isNotBlank() },
+                        source = source
+                    )
                 )
             }
 
@@ -70,13 +78,14 @@ class ApkInstallReceiver : BroadcastReceiver() {
                         message = message,
                         incompatible =
                             status == PackageInstaller.STATUS_FAILURE_INCOMPATIBLE,
-                        versionName = versionName.takeIf { it.isNotBlank() }
+                        versionName = versionName.takeIf { it.isNotBlank() },
+                        source = source
                     )
                 )
                 if (status == PackageInstaller.STATUS_FAILURE_INCOMPATIBLE &&
                     versionName.isNotBlank()
                 ) {
-                    rememberIncompatible(context, packageName, versionName)
+                    rememberIncompatible(context, packageName, versionName, source)
                 }
             }
         }
@@ -100,7 +109,8 @@ class ApkInstallReceiver : BroadcastReceiver() {
     private fun rememberIncompatible(
         context: Context,
         packageName: String,
-        versionName: String
+        versionName: String,
+        source: UpdateSource?
     ) {
         val app = context.applicationContext as? UpdateHubApp ?: return
         val pending = goAsync()
@@ -108,7 +118,8 @@ class ApkInstallReceiver : BroadcastReceiver() {
             try {
                 app.container.settingsRepository.markUpdateIncompatible(
                     packageName,
-                    versionName
+                    versionName,
+                    source
                 )
             } finally {
                 pending.finish()
@@ -128,6 +139,7 @@ class ApkInstallReceiver : BroadcastReceiver() {
         const val ACTION_INSTALL_STATUS = "ru.updatehub.app.action.APK_INSTALL_STATUS"
         const val EXTRA_PACKAGE_NAME = "ru.updatehub.app.extra.PACKAGE_NAME"
         const val EXTRA_VERSION_NAME = "ru.updatehub.app.extra.VERSION_NAME"
+        const val EXTRA_SOURCE_KEY = "ru.updatehub.app.extra.SOURCE_KEY"
     }
 }
 

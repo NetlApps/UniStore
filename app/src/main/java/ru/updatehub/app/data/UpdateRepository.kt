@@ -260,39 +260,62 @@ class UpdateRepository(
         }.awaitAll()
 
         var signatureIncompatibleCount = 0
-        val foundVersions = outcomes.mapNotNull { (source, outcome) ->
-            val found = outcome as? CheckOutcome.Found ?: return@mapNotNull null
-            val versionName = found.versionName.trim()
-            if (versionName.isBlank() ||
-                versionName.equals("VARY", ignoreCase = true) ||
-                versionName.contains("varies", ignoreCase = true)
-            ) {
-                return@mapNotNull null
+        val foundVersions = mutableListOf<StoreVersion>()
+        val foundBySource = linkedMapOf<UpdateSource, StoreVersion>()
+        val rejectedBySource = linkedMapOf<UpdateSource, Pair<String, String>>()
+        val hiddenSources = mutableListOf<UpdateSource>()
+
+        outcomes.forEach { (source, outcome) ->
+            when (outcome) {
+                is CheckOutcome.Found -> {
+                    val versionName = outcome.versionName.trim()
+                    if (versionName.isBlank() ||
+                        versionName.equals("VARY", ignoreCase = true) ||
+                        versionName.contains("varies", ignoreCase = true)
+                    ) {
+                        rejectedBySource[source] =
+                            versionName to "Источник не сообщил номер версии"
+                        return@forEach
+                    }
+
+                    val signatureCompatible = when {
+                        outcome.signature != null && app.signature != null ->
+                            outcome.signature.equals(app.signature, ignoreCase = true)
+
+                        outcome.signatureSha1 != null && app.signatureSha1 != null ->
+                            outcome.signatureSha1.equals(app.signatureSha1, ignoreCase = true)
+
+                        else -> true
+                    }
+                    if (!signatureCompatible) {
+                        signatureIncompatibleCount++
+                        rejectedBySource[source] =
+                            versionName to "Подпись не совпадает с установленным приложением"
+                        return@forEach
+                    }
+
+                    val version = StoreVersion(
+                        source = source,
+                        versionName = versionName,
+                        versionCode = outcome.versionCode,
+                        storeUrl = source.webUrl(app.packageName),
+                        title = outcome.title,
+                        signature = outcome.signature,
+                        signatureSha1 = outcome.signatureSha1
+                    )
+                    if (!VersionRules.isPlausible(version, app)) {
+                        rejectedBySource[source] =
+                            versionName to "Версия не похожа на настоящую и пропущена"
+                    } else {
+                        foundVersions += version
+                        foundBySource[source] = version
+                    }
+                }
+
+                CheckOutcome.HiddenVersion -> hiddenSources += source
+                CheckOutcome.NotFound -> Unit
+                is CheckOutcome.Failed -> Unit
             }
-
-            val signatureCompatible = when {
-                found.signature != null && app.signature != null ->
-                    found.signature.equals(app.signature, ignoreCase = true)
-
-                found.signatureSha1 != null && app.signatureSha1 != null ->
-                    found.signatureSha1.equals(app.signatureSha1, ignoreCase = true)
-
-                else -> true
-            }
-            if (!signatureCompatible) {
-                signatureIncompatibleCount++
-                return@mapNotNull null
-            }
-
-            StoreVersion(
-                source = source,
-                versionName = versionName,
-                versionCode = found.versionCode,
-                storeUrl = source.webUrl(app.packageName),
-                title = found.title,
-                signature = found.signature,
-                signatureSha1 = found.signatureSha1
-            )
         }
 
         // Never keep versions that are older than (or equal to) the installed
@@ -364,6 +387,10 @@ class UpdateRepository(
             compatibleVersions.isNotEmpty() -> UpdateStatus.UPDATE_AVAILABLE
             deviceIncompatibleVersions.isNotEmpty() -> UpdateStatus.INCOMPATIBLE
             unverifiedVersions.isNotEmpty() -> UpdateStatus.INCOMPATIBLE
+            // Google Play deliberately hides the version for a few popular
+            // apps. Claiming "актуально" there would be a guess: the installed
+            // build can lag behind while Play still shows an update.
+            hiddenSources.isNotEmpty() -> UpdateStatus.UNCONFIRMED
             foundVersions.isNotEmpty() -> UpdateStatus.UP_TO_DATE
             signatureIncompatibleCount > 0 -> UpdateStatus.UP_TO_DATE
             errors.isNotEmpty() -> UpdateStatus.ERROR
@@ -371,6 +398,10 @@ class UpdateRepository(
         }
 
         val message = when {
+            status == UpdateStatus.UNCONFIRMED ->
+                hiddenSources.joinToString(", ") { it.title } +
+                    " не публикует номер версии. Обновление могло выйти — проверьте магазин."
+
             status == UpdateStatus.INCOMPATIBLE && deviceIncompatibleReason != null ->
                 deviceIncompatibleReason
 
@@ -393,6 +424,65 @@ class UpdateRepository(
             else -> null
         }
 
+        val sourceChecks = outcomes.map { (source, outcome) ->
+            val found = foundBySource[source]
+            val rejected = rejectedBySource[source]
+            when {
+                found != null -> {
+                    val statusForSource = when (found) {
+                        in compatibleVersions -> SourceCheckStatus.UPDATE_FOUND
+                        in deviceIncompatibleVersions,
+                        in unverifiedVersions -> SourceCheckStatus.INCOMPATIBLE
+
+                        else -> SourceCheckStatus.UP_TO_DATE
+                    }
+                    SourceCheck(
+                        source = source,
+                        status = statusForSource,
+                        versionName = found.versionName,
+                        message = when (statusForSource) {
+                            SourceCheckStatus.UP_TO_DATE -> "Не новее установленной версии"
+                            SourceCheckStatus.INCOMPATIBLE -> deviceIncompatibleReason
+                                ?: "Не удалось проверить совместимость"
+                            else -> null
+                        },
+                        signatureVerified = when {
+                            found.signature == null && found.signatureSha1 == null -> null
+                            else -> true
+                        }
+                    )
+                }
+
+                rejected != null -> SourceCheck(
+                    source = source,
+                    status = SourceCheckStatus.SUSPICIOUS,
+                    versionName = rejected.first,
+                    message = rejected.second,
+                    signatureVerified = if (rejected.second.contains("Подпись")) false else null
+                )
+
+                outcome is CheckOutcome.HiddenVersion -> SourceCheck(
+                    source = source,
+                    status = SourceCheckStatus.HIDDEN,
+                    message = "Магазин не публикует номер версии"
+                )
+
+                outcome is CheckOutcome.NotFound -> SourceCheck(
+                    source = source,
+                    status = SourceCheckStatus.NOT_FOUND,
+                    message = "Приложение не найдено в каталоге"
+                )
+
+                outcome is CheckOutcome.Failed -> SourceCheck(
+                    source = source,
+                    status = SourceCheckStatus.UNAVAILABLE,
+                    message = outcome.message
+                )
+
+                else -> SourceCheck(source = source, status = SourceCheckStatus.NOT_CHECKED)
+            }
+        }
+
         AppUpdateResult(
             packageName = app.packageName,
             installedVersion = app.versionName,
@@ -400,7 +490,8 @@ class UpdateRepository(
             best = best,
             versions = versions,
             checkedAt = System.currentTimeMillis(),
-            message = message
+            message = message,
+            sourceChecks = sourceChecks
         )
     }
 

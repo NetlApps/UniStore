@@ -26,10 +26,22 @@ class ApkPureChecker(
     override suspend fun check(packageName: String): CheckOutcome = gate.withPermit {
         val detailUrl = "https://apkpure.com/-/$packageName"
         val routes = listOf(
+            // The compact endpoint returns only the current version and the
+            // signer. It weighs about 20 KB instead of 300 KB, which makes a
+            // full check much faster on LTE and less likely to time out.
+            FetchRoute(
+                name = ApkPureApi.DETAIL_ROUTE_NAME,
+                url = ApkPureApi.detailUrl(packageName),
+                headers = ApkPureApi.headers(Build.VERSION.SDK_INT),
+                timeoutMs = 5_500L,
+                authoritative = false,
+                alwaysFirst = true,
+                cooldownOnTimeout = true
+            ),
             // The JSON endpoint is not behind the Cloudflare browser challenge
             // that regularly stalls the HTML page on mobile networks. It also
-            // returns versionCode and the signing certificate, so an update
-            // can be rejected before downloading a repackaged APK.
+            // returns versionCode, ABI data and the signing certificate, so an
+            // update can be rejected before downloading a repackaged APK.
             FetchRoute(
                 name = ApkPureApi.ROUTE_NAME,
                 url = ApkPureApi.url(packageName),
@@ -44,6 +56,13 @@ class ApkPureChecker(
                 name = "APKPure",
                 url = detailUrl,
                 timeoutMs = 7_000L
+            ),
+            // A regional mirror with a lighter page. It answers when the main
+            // domain is blocked by a carrier or stuck behind Cloudflare.
+            FetchRoute(
+                name = "APKPure.net",
+                url = "https://apkpure.net/-/$packageName",
+                timeoutMs = 5_000L
             ),
             // The download endpoint lives on a different CDN and is often
             // reachable from networks that block the HTML page. HEAD resolves
@@ -70,7 +89,7 @@ class ApkPureChecker(
             )
         )
 
-        val result = tryRoutes(routes, budgetMs = 20_000L) { route, response ->
+        val result = tryRoutes(routes, budgetMs = 21_000L) { route, response ->
             when {
                 // Only the HTML page can answer "this app does not exist".
                 // A 404 from d.apkpure.com just means that this particular
@@ -83,8 +102,14 @@ class ApkPureChecker(
                     retryable = response.code.isRetryableHttp()
                 )
 
-                route.name == ApkPureApi.ROUTE_NAME -> {
-                    when (val parsed = ApkPureApi.parse(response.body, deviceAbis)) {
+                route.name == ApkPureApi.ROUTE_NAME ||
+                    route.name == ApkPureApi.DETAIL_ROUTE_NAME -> {
+                    val parsedResult = if (route.name == ApkPureApi.DETAIL_ROUTE_NAME) {
+                        ApkPureApi.parseDetail(response.body)
+                    } else {
+                        ApkPureApi.parse(response.body, deviceAbis)
+                    }
+                    when (val parsed = parsedResult) {
                         is ApkPureApiResult.Found -> {
                             ApkPureApi.remember(packageName, deviceAbis, parsed.release)
                             remember(packageName, parsed.release)
@@ -139,7 +164,10 @@ class ApkPureChecker(
      * requested for versions that look like real updates.
      */
     override suspend fun details(packageName: String): VersionDetails? {
-        cached(packageName)?.let { return it.details }
+        // A compact detail answer has no ABI data. Asking the history endpoint
+        // is mandatory on 64-bit-only phones, otherwise an empty architecture
+        // list would be mistaken for a universal APK.
+        cached(packageName)?.takeIf { !it.fromDetailOnly }?.let { return it.details }
 
         // The JSON response already contains ABI, minSdk and bundle type.
         // Reusing the release cached by check() avoids a second page request

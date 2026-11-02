@@ -19,6 +19,9 @@ class UpdateHubApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Install first: a failure while the container is created must still
+        // leave a readable report for the feedback screen.
+        ru.updatehub.app.data.DiagnosticsLog.installCrashHandler(this)
         container = AppContainer(this)
         Notifications.createChannel(this)
 

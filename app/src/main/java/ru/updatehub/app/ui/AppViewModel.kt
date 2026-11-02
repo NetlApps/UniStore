@@ -1,9 +1,14 @@
 package ru.updatehub.app.ui
 
 import android.app.Application
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -21,16 +26,26 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import ru.updatehub.app.BuildConfig
 import ru.updatehub.app.UpdateHubApp
 import ru.updatehub.app.data.AppSettings
 import ru.updatehub.app.data.AppUpdateResult
+import ru.updatehub.app.data.actionVersion
 import ru.updatehub.app.data.DeviceProfile
+import ru.updatehub.app.data.DiagnosticsLog
+import ru.updatehub.app.data.directVersion
+import ru.updatehub.app.data.FeedbackCategory
 import ru.updatehub.app.data.InstalledApp
 import ru.updatehub.app.data.KnownStores
 import ru.updatehub.app.data.ManualStore
 import ru.updatehub.app.data.Palette
 import ru.updatehub.app.data.ResultSerializer
 import ru.updatehub.app.data.SeasonalTheme
+import ru.updatehub.app.data.SelfUpdateDownloader
+import ru.updatehub.app.data.SelfUpdateInfo
+import ru.updatehub.app.data.SignatureUtils
+import ru.updatehub.app.data.SourceCheck
+import ru.updatehub.app.data.SourceCheckStatus
 import ru.updatehub.app.data.StoreHealth
 import ru.updatehub.app.data.StoreLauncher
 import ru.updatehub.app.data.StoreVersion
@@ -50,13 +65,33 @@ import ru.updatehub.app.data.install.ApkVerification
 import ru.updatehub.app.data.install.DirectApkResolver
 import ru.updatehub.app.data.install.DownloadedApkBundle
 import ru.updatehub.app.data.install.deleteDownloadedPackage
-import ru.updatehub.app.data.incompatibleUpdateKey
+import ru.updatehub.app.data.isIncompatibleUpdate
 import ru.updatehub.app.notifications.UpdateScheduler
 
 enum class AppFilter {
     ALL,
     UPDATES,
-    ACTUAL
+    /** Updates from one store chosen by the user. */
+    STORES
+}
+
+/** Self-update UI state; the actual GitHub work lives in [SelfUpdateInfo]. */
+data class SelfUpdateState(
+    val checking: Boolean = false,
+    val info: SelfUpdateInfo = SelfUpdateInfo.current(),
+    val downloading: Boolean = false,
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val verifying: Boolean = false,
+    val installing: Boolean = false,
+    val error: String? = null
+) {
+    val progress: Float?
+        get() = if (totalBytes > 0) {
+            (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+        } else {
+            null
+        }
 }
 
 data class CheckUiState(
@@ -96,11 +131,14 @@ data class UiState(
     val bulk: BulkUpdateState = BulkUpdateState(),
     val storeRedirect: StoreRedirectRequest? = null,
     val filter: AppFilter = AppFilter.ALL,
+    /** Last store chosen on the "Обновления по магазинам" tab. */
+    val storeFilter: UpdateSource? = null,
     val search: String = "",
     val showSystemApps: Boolean = false,
     val deviceProfile: DeviceProfile = DeviceProfile.empty(),
     val installStates: Map<String, UpdateInstallState> = emptyMap(),
     val storeHealth: Map<UpdateSource, StoreHealth> = emptyMap(),
+    val selfUpdate: SelfUpdateState = SelfUpdateState(),
     /** A VPN is running, but UniStore itself is not routed through it. */
     val vpnBypassed: Boolean = false
 )
@@ -126,14 +164,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private data class PendingInstall(
         val packageName: String,
         val versionName: String,
-        val bundle: DownloadedApkBundle
+        val bundle: DownloadedApkBundle,
+        val source: UpdateSource? = null
     )
 
     private data class PreparedInstall(
         val packageName: String,
         val versionName: String,
         val label: String,
-        val bundle: DownloadedApkBundle
+        val bundle: DownloadedApkBundle,
+        val source: UpdateSource? = null
     )
 
     private data class BulkTarget(
@@ -169,6 +209,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val signatureMutex = Mutex()
 
     init {
+        DiagnosticsLog.record("app", "Запуск UniStore ${BuildConfig.VERSION_NAME}")
         // PackageInstaller reports the result of a split-APK session through a
         // broadcast. The receiver stores failures and deletes files; the live
         // screen needs the same event to leave the "Установка" state.
@@ -200,9 +241,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
                 _uiState.update { state ->
                     val results = incomingResults ?: state.results
+                    val persistedStore = UpdateSource.fromKey(settings.storeFilterKey)
+                        ?.takeIf { it.key in settings.enabledSources }
                     state.copy(
                         settings = settings,
                         settingsLoaded = true,
+                        // Keep a store the user just picked while DataStore is
+                        // still emitting older snapshots. Fall back to the
+                        // saved key on first load or when the store was turned
+                        // off in settings.
+                        storeFilter = state.storeFilter
+                            ?.takeIf { it.key in settings.enabledSources }
+                            ?: persistedStore,
                         results = reconcile(
                             results,
                             state.installed.associateBy { it.packageName },
@@ -540,7 +590,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         setInstallState(pending.packageName, UpdateInstallState.Installing)
         launchedBundles += pending.bundle
         viewModelScope.launch {
-            if (!apkInstaller.install(pending.bundle, pending.versionName)) {
+            if (!apkInstaller.install(
+                    bundle = pending.bundle,
+                    versionName = pending.versionName,
+                    source = pending.source
+                )
+            ) {
                 launchedBundles -= pending.bundle
                 pending.bundle.delete()
                 setInstallState(
@@ -559,12 +614,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun handleInstallEvent(event: ApkInstallEvent) {
         launchedBundles.removeAll { it.packageName == event.packageName }
+        if (event.packageName == getApplication<Application>().packageName) {
+            // A self-update window can be cancelled. Without this reset the
+            // settings block would stay in "Подтвердите установку" forever.
+            _uiState.update {
+                it.copy(
+                    selfUpdate = it.selfUpdate.copy(
+                        downloading = false,
+                        verifying = false,
+                        installing = false
+                    )
+                )
+            }
+        }
         val label = _uiState.value.installed
             .firstOrNull { it.packageName == event.packageName }
             ?.label
             ?: event.packageName
 
         if (event.success) {
+            DiagnosticsLog.record("install", "Установлено: $label ${event.versionName.orEmpty()}")
             setInstallState(event.packageName, UpdateInstallState.Completed)
             showMessage("$label обновлено")
             if (bulkInstallingPackage == event.packageName) {
@@ -576,11 +645,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         val message = event.message?.takeIf { it.isNotBlank() }
             ?: "Не удалось установить обновление"
+        DiagnosticsLog.record(
+            "install",
+            "Ошибка установки $label ${event.versionName.orEmpty()}: $message"
+        )
         setInstallState(event.packageName, UpdateInstallState.Failed(message))
         showMessage(message)
 
         if (event.incompatible) {
-            markResultIncompatible(event.packageName, message, event.versionName)
+            markResultIncompatible(
+                event.packageName,
+                message,
+                event.versionName,
+                event.source
+            )
         }
         if (bulkInstallingPackage == event.packageName) {
             advanceBulkInstall(event.packageName)
@@ -588,7 +666,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateApp(packageName: String) {
+        updateApp(packageName, preferredSource = null)
+    }
+
+    /**
+     * Updates from the store selected on the "Обновления по магазинам" tab.
+     * Without this the card could show APKPure's version while the button
+     * installed a newer Google Play build (or the other way around).
+     */
+    fun updateAppFromStore(packageName: String, source: UpdateSource) {
+        updateApp(packageName, preferredSource = source)
+    }
+
+    private fun updateApp(packageName: String, preferredSource: UpdateSource?) {
         val state = _uiState.value
+        DiagnosticsLog.record(
+            "update",
+            if (preferredSource == null) {
+                "Нажато «Обновить»: $packageName"
+            } else {
+                "Нажато «Обновить»: $packageName из ${preferredSource.title}"
+            }
+        )
         if (state.bulk.isRunning) {
             showMessage("Дождитесь окончания массового обновления")
             return
@@ -632,20 +731,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val direct = chooseDirectSource(result, app)
-        if (direct != null) {
-            startInstall(app, direct, result)
+        if (preferredSource != null) {
+            val fromStore = newestAvailableVersion(
+                result.versions.filter { it.source == preferredSource },
+                app
+            )
+            if (fromStore == null) {
+                showMessage("В ${preferredSource.title} нет обновления для этого приложения")
+                return
+            }
+            if (fromStore.source.supportsDirectDownload) {
+                startInstall(app, fromStore, result)
+            } else {
+                verifyStoreAndRedirect(app, fromStore)
+            }
             return
         }
 
-        val fallback = result.best
-            ?.takeIf { VersionRules.isNewer(it, app) }
-            ?: result.versions.firstOrNull { VersionRules.isNewer(it, app) }
-        if (fallback != null) {
-            verifyStoreAndRedirect(app, fallback)
-        } else {
-            showMessage("Установлена последняя версия")
+        val action = result.actionVersion(app)
+        if (action != null) {
+            if (action.source.supportsDirectDownload) {
+                startInstall(app, action, result)
+            } else {
+                verifyStoreAndRedirect(app, action)
+            }
+            return
         }
+
+        showMessage("Установлена последняя версия")
     }
 
     /**
@@ -688,7 +801,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     markResultWithoutUpdate(
                         packageName,
-                        "В магазине уже нет более новой версии"
+                        "В магазине уже нет более новой версии",
+                        version.source
                     )
                     showMessage("В ${version.source.title} нет более новой версии")
                 }
@@ -698,7 +812,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (outcome is CheckOutcome.NotFound) {
                 markResultWithoutUpdate(
                     packageName,
-                    "Приложение не найдено в ${version.source.title}"
+                    "Приложение не найдено в ${version.source.title}",
+                    version.source
                 )
                 showMessage("Приложение не найдено в ${version.source.title}")
                 return@launch
@@ -709,16 +824,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun markResultWithoutUpdate(packageName: String, message: String) {
+    /**
+     * Drops a stale offer from one store without erasing updates that other
+     * stores still have. A single empty store page used to clear the whole
+     * result and leave the app looking up to date.
+     */
+    private fun markResultWithoutUpdate(
+        packageName: String,
+        message: String,
+        source: UpdateSource
+    ) {
         _uiState.update { state ->
             val result = state.results[packageName] ?: return@update state
+            val app = state.installed.firstOrNull { it.packageName == packageName }
+            val remaining = result.versions.filterNot { it.source == source }
+            val best = newestAvailableVersion(remaining, app)
             state.copy(
                 results = state.results + (
                     packageName to result.copy(
-                        status = UpdateStatus.UP_TO_DATE,
-                        best = null,
-                        versions = emptyList(),
-                        message = message
+                        status = if (best != null) {
+                            UpdateStatus.UPDATE_AVAILABLE
+                        } else {
+                            UpdateStatus.UP_TO_DATE
+                        },
+                        best = best,
+                        versions = remaining,
+                        message = if (best == null) message else null,
+                        sourceChecks = result.sourceChecks.map { check ->
+                            if (check.source == source &&
+                                check.status == SourceCheckStatus.UPDATE_FOUND
+                            ) {
+                                check.copy(
+                                    status = SourceCheckStatus.UP_TO_DATE,
+                                    message = message
+                                )
+                            } else {
+                                check
+                            }
+                        }
                     )
                     )
             )
@@ -733,22 +876,57 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun markResultIncompatible(
         packageName: String,
         message: String,
-        versionName: String? = null
+        versionName: String? = null,
+        source: UpdateSource? = null
     ) {
         _uiState.update { state ->
             val result = state.results[packageName] ?: return@update state
+            val app = state.installed.firstOrNull { it.packageName == packageName }
+            val remaining = result.versions.filterNot { version ->
+                isIncompatibleUpdate(
+                    keys = state.settings.incompatibleUpdates,
+                    packageName = packageName,
+                    versionName = version.versionName,
+                    source = version.source
+                ) ||
+                    when {
+                        versionName == null -> true
+                        version.versionName != versionName -> false
+                        source == null -> true
+                        else -> version.source == source
+                    }
+            }
+            val best = newestAvailableVersion(remaining, app)
+            val failedSource = { check: SourceCheck ->
+                val sameVersion = versionName == null ||
+                    check.versionName == null ||
+                    check.versionName == versionName
+                val sameSource = source == null || check.source == source
+                sameVersion && sameSource
+            }
             state.copy(
                 results = state.results + (
                     packageName to result.copy(
-                        status = UpdateStatus.INCOMPATIBLE,
-                        versions = result.versions.filterNot { version ->
-                            version.versionName == versionName ||
-                                incompatibleUpdateKey(
-                                    packageName,
-                                    version.versionName
-                                ) in state.settings.incompatibleUpdates
+                        status = if (best != null) {
+                            UpdateStatus.UPDATE_AVAILABLE
+                        } else {
+                            UpdateStatus.INCOMPATIBLE
                         },
-                        message = message
+                        best = best,
+                        versions = remaining,
+                        message = if (best == null) message else null,
+                        sourceChecks = result.sourceChecks.map { check ->
+                            if (check.status == SourceCheckStatus.UPDATE_FOUND &&
+                                failedSource(check)
+                            ) {
+                                check.copy(
+                                    status = SourceCheckStatus.INCOMPATIBLE,
+                                    message = message
+                                )
+                            } else {
+                                check
+                            }
+                        }
                     )
                     )
             )
@@ -756,6 +934,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openInStore(packageName: String, source: UpdateSource) {
+        DiagnosticsLog.record("store", "Открытие $packageName в ${source.key}")
         if (!StoreLauncher.open(getApplication(), packageName, source)) {
             showMessage("Не удалось открыть ${source.title}")
         }
@@ -804,19 +983,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun chooseDirectSource(result: AppUpdateResult, app: InstalledApp): StoreVersion? =
-        result.versions
-            .filter { it.source.supportsDirectDownload }
-            .filter { VersionRules.isNewer(it, app) }
-            .maxWithOrNull { first, second ->
-                val byVersion = VersionComparator.compare(first.versionName, second.versionName)
-                if (byVersion != 0) {
-                    byVersion
-                } else {
-                    UpdateSource.entries.indexOf(second.source) -
-                        UpdateSource.entries.indexOf(first.source)
-                }
+    private fun newestAvailableVersion(
+        versions: List<StoreVersion>,
+        app: InstalledApp?
+    ): StoreVersion? = versions
+        .filter { app != null && VersionRules.isNewer(it, app) }
+        .maxWithOrNull { first, second ->
+            val byVersion = VersionComparator.compare(first.versionName, second.versionName)
+            if (byVersion != 0) {
+                byVersion
+            } else {
+                UpdateSource.entries.indexOf(second.source) -
+                    UpdateSource.entries.indexOf(first.source)
             }
+        }
+
+    private fun chooseDirectSource(result: AppUpdateResult, app: InstalledApp): StoreVersion? =
+        result.directVersion(app)
 
     private fun startInstall(
         app: InstalledApp,
@@ -835,7 +1018,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     pendingInstall = PendingInstall(
                         packageName = packageName,
                         versionName = version.versionName,
-                        bundle = bundle
+                        bundle = bundle,
+                        source = version.source
                     )
                     setInstallState(
                         packageName,
@@ -848,7 +1032,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
                 setInstallState(packageName, UpdateInstallState.Installing)
                 launchedBundles += bundle
-                if (!apkInstaller.install(bundle, version.versionName)) {
+                if (!apkInstaller.install(
+                        bundle = bundle,
+                        versionName = version.versionName,
+                        source = version.source
+                    )
+                ) {
                     launchedBundles -= bundle
                     bundle.delete()
                     error("Не удалось запустить установку")
@@ -862,6 +1051,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     ?: "Не удалось скачать обновление"
                 setInstallState(packageName, UpdateInstallState.Failed(message))
                 showMessage(message)
+                // Preparation failures happen before the system installer
+                // reports anything, so without this line the feedback report
+                // would not show what broke the download.
+                DiagnosticsLog.record(
+                    "install",
+                    "Не удалось подготовить $packageName ${version.versionName} " +
+                        "(${version.source.key}): $message"
+                )
 
                 // A direct source can hold a stale or fake listing for this
                 // package (for example, a same-name app with a 404 download
@@ -934,12 +1131,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 bundle.delete()
                 settingsRepository.markUpdateIncompatible(
                     packageName,
-                    version.versionName
+                    version.versionName,
+                    version.source
                 )
                 markResultIncompatible(
                     packageName,
                     verification.message,
-                    version.versionName
+                    version.versionName,
+                    version.source
                 )
                 error(verification.message)
             }
@@ -954,12 +1153,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     // checked normally.
                     settingsRepository.markUpdateIncompatible(
                         packageName,
-                        version.versionName
+                        version.versionName,
+                        version.source
                     )
                     markResultIncompatible(
                         packageName,
                         verification.message,
-                        version.versionName
+                        version.versionName,
+                        version.source
                     )
                 }
                 error(verification.message)
@@ -1165,7 +1366,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     packageName = packageName,
                     versionName = target.version.versionName,
                     label = target.app.label,
-                    bundle = bundle
+                    bundle = bundle,
+                    source = target.version.source
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1217,7 +1419,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         setInstallState(next.packageName, UpdateInstallState.Installing)
         launchedBundles += next.bundle
         viewModelScope.launch {
-            if (!apkInstaller.install(next.bundle, next.versionName)) {
+            if (!apkInstaller.install(
+                    bundle = next.bundle,
+                    versionName = next.versionName,
+                    source = next.source
+                )
+            ) {
                 launchedBundles -= next.bundle
                 next.bundle.delete()
                 setInstallState(
@@ -1366,6 +1573,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        DiagnosticsLog.record(
+            "check",
+            "Проверка: ${state.settings.trackedPackages.size} приложений, " +
+                sources.joinToString(",") { it.key }
+        )
+
         if (state.installed.isEmpty()) {
             showMessage("Список приложений ещё загружается")
             refreshInstalledApps(showLoading = true)
@@ -1477,11 +1690,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     it.status == UpdateStatus.UPDATE_AVAILABLE
                 }
                 val errors = reconciled.values.count { it.status == UpdateStatus.ERROR }
+                val unconfirmed = reconciled.values.count {
+                    it.status == UpdateStatus.UNCONFIRMED
+                }
+                DiagnosticsLog.record(
+                    "check",
+                    "Итог проверки: обновлений $updates, ошибок $errors, " +
+                        "без версии $unconfirmed"
+                )
                 when {
                     updates > 0 -> showMessage(
                         if (updates == 1) "Найдено 1 обновление"
                         else "Найдено обновлений: $updates"
                     )
+
+                    unconfirmed > 0 && errors > 0 ->
+                        showMessage("Часть приложений не проверена, у остальных магазин скрывает версию")
+
+                    unconfirmed > 0 ->
+                        showMessage("Есть приложения без номера версии — проверьте магазины")
 
                     errors > 0 -> showMessage("Не удалось проверить часть приложений")
                     else -> showMessage("Все приложения актуальны")
@@ -1573,6 +1800,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val updated = if (source.key in current) current - source.key else current + source.key
+        DiagnosticsLog.record(
+            "settings",
+            "Источник ${source.key}: ${if (source.key in current) "выключен" else "включён"}"
+        )
         viewModelScope.launch {
             settingsRepository.setEnabledSources(updated)
         }
@@ -1635,7 +1866,215 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setFilter(filter: AppFilter) {
         _uiState.update { it.copy(filter = filter) }
+        DiagnosticsLog.record(
+            "ui",
+            "Фильтр: " + when (filter) {
+                AppFilter.ALL -> "все"
+                AppFilter.UPDATES -> "обновления"
+                AppFilter.STORES -> "по магазинам"
+            }
+        )
     }
+
+    /**
+     * Chooses the store for the "Обновления по магазинам" tab. The key is
+     * persisted, so switching back to "Все" and returning keeps the store.
+     */
+    fun selectStoreFilter(source: UpdateSource) {
+        DiagnosticsLog.record("ui", "Магазин в фильтре: ${source.key}")
+        _uiState.update { it.copy(storeFilter = source, filter = AppFilter.STORES) }
+        viewModelScope.launch {
+            settingsRepository.setStoreFilterKey(source.key)
+        }
+    }
+
+    fun checkSelfUpdate() {
+        if (_uiState.value.selfUpdate.checking) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    selfUpdate = it.selfUpdate.copy(checking = true, error = null)
+                )
+            }
+            val info = SelfUpdateInfo.load()
+            DiagnosticsLog.record(
+                "self-update",
+                info.error ?: "Последняя версия ${info.latestVersion}, обновление=${info.updateAvailable}"
+            )
+            _uiState.update {
+                it.copy(
+                    selfUpdate = it.selfUpdate.copy(
+                        checking = false,
+                        info = info,
+                        error = info.error
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Downloads the GitHub APK, checks its SHA-256, package name, version and
+     * signing certificate, then hands it to Android's installer. The system
+     * confirmation window is still required.
+     */
+    fun downloadSelfUpdate() {
+        val state = _uiState.value
+        val current = state.selfUpdate
+        val info = current.info
+        if (current.downloading || current.verifying || current.installing) return
+        if (!info.updateAvailable) {
+            showMessage("У вас актуальная версия приложения")
+            return
+        }
+        if (info.downloadUrl.isNullOrBlank()) {
+            showMessage("В релизе нет APK-файла — откройте страницу GitHub")
+            return
+        }
+        if (!apkInstaller.canInstall()) {
+            showMessage("Разрешите установку приложений из UniStore")
+            apkInstaller.openInstallPermissionSettings()
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    selfUpdate = it.selfUpdate.copy(
+                        downloading = true,
+                        downloadedBytes = 0L,
+                        totalBytes = info.assetSize ?: 0L,
+                        error = null
+                    )
+                )
+            }
+            val app = getApplication<Application>()
+            try {
+                val bundle = SelfUpdateDownloader(app).download(info) { done, total ->
+                    _uiState.update {
+                        it.copy(
+                            selfUpdate = it.selfUpdate.copy(
+                                downloadedBytes = done,
+                                totalBytes = total
+                            )
+                        )
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        selfUpdate = it.selfUpdate.copy(
+                            downloading = false,
+                            verifying = true
+                        )
+                    )
+                }
+                val installedSelf = selfInstalledApp()
+                if (installedSelf == null) {
+                    bundle.delete()
+                    throw IllegalStateException("Не удалось прочитать установленную версию UniStore")
+                }
+                val verification = apkInstaller.verify(bundle, installedSelf)
+                if (verification is ApkVerification.Failed ||
+                    verification is ApkVerification.Incompatible
+                ) {
+                    bundle.delete()
+                    val message = when (verification) {
+                        is ApkVerification.Failed -> verification.message
+                        is ApkVerification.Incompatible -> verification.message
+                        else -> "APK не прошёл проверку"
+                    }
+                    throw IllegalStateException(message)
+                }
+                val started = apkInstaller.install(
+                    bundle = bundle,
+                    versionName = info.latestVersion ?: installedSelf.versionName
+                )
+                if (!started) {
+                    bundle.delete()
+                    throw IllegalStateException("Android не открыл установщик")
+                }
+                DiagnosticsLog.record("self-update", "Запущена установка ${info.latestVersion}")
+                _uiState.update {
+                    it.copy(
+                        selfUpdate = it.selfUpdate.copy(
+                            verifying = false,
+                            installing = true
+                        )
+                    )
+                }
+                showMessage("Подтвердите установку в системном окне")
+            } catch (cancelled: CancellationException) {
+                _uiState.update {
+                    it.copy(
+                        selfUpdate = it.selfUpdate.copy(
+                            downloading = false,
+                            verifying = false
+                        )
+                    )
+                }
+                throw cancelled
+            } catch (throwable: Throwable) {
+                DiagnosticsLog.record(
+                    "self-update",
+                    "Ошибка обновления: ${throwable.message}"
+                )
+                val message = throwable.message?.takeIf { it.isNotBlank() }
+                    ?: "Не удалось скачать обновление"
+                _uiState.update {
+                    it.copy(
+                        selfUpdate = it.selfUpdate.copy(
+                            downloading = false,
+                            verifying = false,
+                            installing = false,
+                            error = message
+                        )
+                    )
+                }
+                showMessage(message)
+            }
+        }
+    }
+
+    fun openSelfUpdatePage() {
+        val url = _uiState.value.selfUpdate.info.releaseUrl
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { getApplication<Application>().startActivity(intent) }
+            .onFailure { showMessage("Не удалось открыть GitHub") }
+    }
+
+    private fun selfInstalledApp(): InstalledApp? {
+        val context = getApplication<Application>()
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_SIGNATURES
+        }
+        val info = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, flags)
+        }.getOrNull() ?: return null
+        val (signature, signatureSha1) = SignatureUtils.hashes(info)
+        return InstalledApp(
+            packageName = context.packageName,
+            label = "UniStore",
+            versionName = info.versionName ?: BuildConfig.VERSION_NAME,
+            versionCode = PackageInfoCompat.getLongVersionCode(info),
+            isSystem = false,
+            installedAt = 0L,
+            signature = signature,
+            signatureSha1 = signatureSha1
+        )
+    }
+
+    fun buildFeedbackReport(
+        category: FeedbackCategory,
+        description: String
+    ): String = DiagnosticsLog.buildReport(
+        context = getApplication(),
+        category = category,
+        description = description
+    )
 
     fun setSearch(query: String) {
         _uiState.update { it.copy(search = query) }
@@ -1707,8 +2146,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } else {
                 val blocked = { version: StoreVersion ->
-                    incompatibleUpdateKey(packageName, version.versionName) in
-                        incompatibleUpdates
+                    isIncompatibleUpdate(
+                        keys = incompatibleUpdates,
+                        packageName = packageName,
+                        versionName = version.versionName,
+                        source = version.source
+                    )
                 }
                 val best = result.best
                 val blockedBest = best != null &&
@@ -1764,7 +2207,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         else -> null
                     },
                     versions = allowedVersions,
-                    message = message
+                    message = message,
+                    // The cached per-store rows are from the previous check.
+                    // Re-evaluate them against the version that is installed
+                    // now, otherwise a just-updated app keeps its old
+                    // "Есть обновление" badge until the next full check.
+                    sourceChecks = result.sourceChecks.map { check ->
+                        VersionRules.reconcileSourceCheck(
+                            check = check,
+                            app = app,
+                            versions = result.versions,
+                            isBlocked = blocked
+                        )
+                    }
                 )
             }
         }

@@ -94,7 +94,7 @@ class ApkDownloader(private val context: Context) {
         val temporary = File(directory, "$packageName.download")
         temporary.delete()
 
-        val pageUrl = "https://apkpure.com/ru/x/$packageName/download"
+        val pageUrl = spec.pageUrl ?: "https://apkpure.com/ru/x/$packageName/download"
         var downloadUrl = spec.url
         if (spec.url.contains("apkpure.com")) {
             // OkHttp is blocked by APKPure's TLS fingerprint check, so the
@@ -114,7 +114,7 @@ class ApkDownloader(private val context: Context) {
             .build()
 
         try {
-            Log.i(TAG, "Скачивание ${spec.source.key}: $downloadUrl")
+            Log.i(TAG, "Скачивание ${spec.source?.key ?: "GitHub"}: $downloadUrl")
             val probe = probeDownload(request)
             val ranges = if (probe != null &&
                 supportsRangeDownload(
@@ -183,7 +183,7 @@ class ApkDownloader(private val context: Context) {
             temporary.delete()
             bundle
         } catch (t: Throwable) {
-            Log.w(TAG, "Не удалось скачать APK ${spec.source.key}: ${t.message}", t)
+            Log.w(TAG, "Не удалось скачать APK ${spec.source?.key ?: "GitHub"}: ${t.message}", t)
             temporary.delete()
             packageDirectory.deleteRecursively()
             throw t

@@ -9,13 +9,13 @@
   [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](#требования)
   [![Kotlin 2.0](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&logoColor=white)](#технологии)
   [![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)](#технологии)
-  [![Release](https://img.shields.io/badge/release-1.1.8-6366F1)](../../releases/latest)
+  [![Release](https://img.shields.io/badge/release-1.2.0-6366F1)](../../releases/latest)
   [![APK](https://img.shields.io/badge/APK-~2%20MB-22C55E)](#установка)
-  [![Tests](https://img.shields.io/badge/tests-102%20passed-16A34A)](#качество-и-проверка)
+  [![Tests](https://img.shields.io/badge/tests-138%20passed-16A34A)](#качество-и-проверка)
   [![CI](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml/badge.svg)](https://github.com/NetlApps/UniStore/actions/workflows/android-ci.yml)
 </div>
 
-> **Сайт:** [netlapps.github.io/UniStore](https://netlapps.github.io/UniStore/) · **Статус:** активная разработка. Последний релиз — **1.1.8** (versionCode 12). Версия проверена на Xiaomi `2511FPC34G` (Android 16, HyperOS 3): Wi‑Fi — 18 с, LTE без VPN — 106 с на 79 приложениях; APK APKPure скачан, подпись проверена, установка подтверждена системным установщиком.
+> **Сайт:** [netlapps.github.io/UniStore](https://netlapps.github.io/UniStore/) · **Статус:** активная разработка. Последний релиз — **1.2.0** (versionCode 14). Версия проверена на Xiaomi `2511FPC34G` (Android 16, HyperOS 3): 79 приложений, установка APK/XAPK из RuStore и APKPure, OTA-самообновление и отчёт обратной связи.
 >
 > **Язык:** Русский · [English](#english)
 
@@ -68,18 +68,27 @@ UniStore следит за приложениями, которые вы доб�
 - Автопроверка при запуске, ручная кнопка «Проверить» и необязательная фоновая проверка через WorkManager.
 - Индикаторы связи магазинов: зелёный, жёлтый, красный и задержка в миллисекундах.
 - Скрытие несовместимых версий: только 32-битный APK на 64-битном телефоне, слишком новый `targetSdk` и другие случаи не попадают в счётчик обновлений.
+- Вкладка «Обновления по магазинам»: выбранный магазин запоминается, показывает свою версию и устанавливает именно её, а не глобально лучшую сборку из другого каталога.
+- Честный статус «Не подтверждено», когда Google Play скрывает номер версии (WhatsApp, Telegram), вместо ложного «актуально».
+- В карточке приложения видны источники обновления, совпадение подписи и правдоподобность версии. Несовместимость хранится отдельно для каждого магазина.
 - Системные приложения скрыты по умолчанию. Дополнительно исключаются фоновые компоненты без MAIN-активности, верификаторы и известные предустановки производителей.
 
 ### Загрузка и установка
 
 - Прямая загрузка APK/XAPK для RuStore, APKPure, F-Droid и Aptoide.
-- APKPure загружается через невидимый WebView: страница открывается, кнопка скачивания нажимается синтетическим touch-событием, подписанная ссылка `data.winudf.com` скачивается через OkHttp.
+- APKPure скачивается по прямой подписанной ссылке `data.winudf.com` для нужной архитектуры; невидимый WebView остаётся резервом.
 - Split-APK: base и все части проверяются отдельно и устанавливаются одной сессией `PackageInstaller`.
 - На Android 9 манифест и сертификат split-частей читаются напрямую из архива, потому что `PackageManager` не умеет разбирать их через `getPackageArchiveInfo()`.
 - Большие файлы качаются по HTTP Range в четыре соединения (два в режиме слабого устройства) с автоматическим откатом на одно соединение.
 - Проверка подписи SHA-1/SHA-256, пакета и версии до передачи файла системе.
 - Очистка кэша после установки, отмены загрузки и при запуске после прерванной установки.
 - «Обновить всё»: до трёх параллельных загрузок, проверенные файлы ждут своей очереди, системный установщик открывается по одному.
+
+### Обновление и поддержка
+
+- Вверху настроек блок самообновления UniStore: актуальная версия или загрузка нового APK с GitHub, проверка подписи и системный установщик.
+- Экран обратной связи собирает диагностику в формате bug report, копирует полный отчёт в буфер и открывает GitHub issue с безопасной длиной URL.
+- Плавная анимация процентов скачивания без рывков даже при параллельной загрузке частей.
 
 ### Интерфейс
 
@@ -132,6 +141,16 @@ UniStore следит за приложениями, которые вы доб�
 Магазины без публичного API версий не участвуют в автоматической проверке: UniStore не выдумывает для них обновления, а показывает установленные магазины первыми и открывает их страницы.
 
 ## Последние обновления
+
+### 1.2.0 — самообновление, магазины и честный статус
+
+- В настройках появился блок обновления UniStore: актуальная версия либо загрузка APK с GitHub, проверка подписи и системный установщик.
+- Новая вкладка «Обновления по магазинам»: выбранный магазин запоминается и показывает именно свою версию; кнопка устанавливает её же.
+- Google Play больше не выдаёт ложное «актуально», когда скрывает номер версии: WhatsApp и Telegram получают статус «Не подтверждено» с объяснением.
+- В карточке видны источники обновления, совпадение подписи и правдоподобность версии. Сбойная сборка APKPure не скрывает обновление из Google Play.
+- Исправлена установка XAPK: ZIP EOCD и APK Signing Block читаются в little-endian, поэтому подпись split-частей совпадает с `apksigner`, а система больше не отклоняет `config.*.apk`.
+- APKPure надёжнее находит версии: detail API, history API для ABI и резерв `apkpure.net`; варианты ChromeOS отбрасываются.
+- Экран обратной связи собирает bug report с диагностикой и открывает GitHub issue без ошибки 414; проценты загрузки анимируются плавно.
 
 ### 1.1.8 — меньше зависимости от VPN
 
@@ -194,7 +213,7 @@ UniStore следит за приложениями, которые вы доб�
 
 ### Шаги
 
-1. Скачайте `UniStore-1.1.8.apk` из [Releases](../../releases/latest) или возьмите файл `UniStore-1.1.8.apk` из корня репозитория.
+1. Скачайте `UniStore-1.2.0.apk` из [Releases](../../releases/latest) или возьмите файл `UniStore-1.2.0.apk` из корня репозитория.
 2. Откройте APK и разрешите установку из этого источника, если Android попросит.
 3. При первом запуске выберите источники и нажмите «Начать».
 4. Добавьте приложения и нажмите «Проверить».
@@ -203,15 +222,15 @@ UniStore следит за приложениями, которые вы доб�
 ### Контрольная сумма
 
 ```text
-Файл:    UniStore-1.1.8.apk
-Размер:  2 070 683 байт
-SHA-256: 14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C
+Файл:    UniStore-1.2.0.apk
+Размер:  2 119 839 байт
+SHA-256: A8A8F37CBA6D21E2C659491D1019F0A43EAD7DF7B106A8C00C7C2B1CE722139C
 ```
 
 Проверка в Windows:
 
 ```powershell
-Get-FileHash .\UniStore-1.1.8.apk -Algorithm SHA256
+Get-FileHash .\UniStore-1.2.0.apk -Algorithm SHA256
 ```
 
 ## Сборка
@@ -312,16 +331,16 @@ Compose UI → ApkDownloader → ApkArchiveInspector → ApkInstaller → Packag
 
 | Проверка | Результат |
 |---|---|
-| Unit-тесты | **102/102** |
+| Unit-тесты | **138/138** |
 | Lint | **0 ошибок**, 19 предупреждений |
-| Release APK | **2 070 683 байт** |
-| SHA-256 | `14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C` |
+| Release APK | **2 119 839 байт** |
+| SHA-256 | `A8A8F37CBA6D21E2C659491D1019F0A43EAD7DF7B106A8C00C7C2B1CE722139C` |
 | Тестовое устройство | Xiaomi `2511FPC34G`, Android 16, HyperOS 3 |
 | Приложений под наблюдением | 79 |
 | Системные верификаторы | Скрыты |
 | Сеть | Wi‑Fi и LTE |
 
-Тесты покрывают сравнение версий, правила обновлений, сезонные даты, проверку подписей, совместимость Android/ABI, чтение split-APK, HTTP Range, маршруты источников, DNS-over-HTTPS, JSON APKPure, фильтрацию ChromeOS-вариантов и определение системных приложений.
+Тесты покрывают сравнение версий, правила обновлений, сезонные даты, проверку подписей, совместимость Android/ABI, чтение split-APK, HTTP Range, маршруты источников, DNS-over-HTTPS, JSON APKPure, фильтрацию ChromeOS-вариантов, определение системных приложений, диагностику и выбор источника для кнопки обновления.
 
 ## Ограничения
 
@@ -381,20 +400,23 @@ The app UI and the rest of this README are currently in Russian; this section is
 - **9 stores with automatic checks:** Google Play, RuStore, APKPure, F-Droid, Aptoide, GetApps, Galaxy Store, V-Appstore and Flyme Store.
 - **7 stores with manual links:** AppGallery, Honor App Market, HeyTap Store, Palm Store, Amazon Appstore, Lenovo App Store and ZTE App Store.
 - **Direct APK/XAPK downloads** from RuStore, APKPure, F-Droid and Aptoide, including split APKs.
+- **Store-specific update tabs** with a remembered store, the exact version that store offers, and a clear “unconfirmed” status when Google Play hides a version.
+- **Source and signature breakdown** in every app sheet; an incompatible build from one store no longer hides another store's update.
+- **Built-in GitHub self-update** and diagnostic bug reports with a copyable full log.
 - **Checks before installation:** package name, version, ABI, `minSdk`/`targetSdk` and SHA-1/SHA-256 certificate. APKs with a different signature are blocked.
 - **Privacy:** no ads, accounts, analytics or telemetry. Settings and the tracked app list stay on the device.
 - **Small and fast:** Android 8.0+, release APK about 2 MB, parallel checks and a low-end device mode.
 - **Russian UI:** Material 3, four themes, seven color schemes and seasonal effects.
-- **Quality:** 102 unit tests and a green CI workflow.
+- **Quality:** 138 unit tests and a green CI workflow.
 
 ### Install
 
-1. Download [UniStore-1.1.8.apk](https://github.com/NetlApps/UniStore/releases/download/v1.1.8/UniStore-1.1.8.apk).
+1. Download [UniStore-1.2.0.apk](https://github.com/NetlApps/UniStore/releases/download/v1.2.0/UniStore-1.2.0.apk).
 2. Open the file and allow installs from this source if Android asks.
 3. On first launch, choose stores, add apps and tap **«Проверить»** (Check).
 4. Confirm each update in the standard Android installer.
 
-SHA-256: `14C6305D6244D0CBBE327D7B1E6FE6D6E1DF31A264616B1546B4CCEB6AE47D6C`
+SHA-256: `A8A8F37CBA6D21E2C659491D1019F0A43EAD7DF7B106A8C00C7C2B1CE722139C`
 
 ### Links
 

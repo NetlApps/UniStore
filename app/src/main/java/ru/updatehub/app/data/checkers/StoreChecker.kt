@@ -15,6 +15,13 @@ sealed interface CheckOutcome {
 
     data object NotFound : CheckOutcome
 
+    /**
+     * The store knows the app but deliberately does not publish its current
+     * version. Google Play does this for WhatsApp and Telegram. Such a source
+     * can neither confirm nor deny an update.
+     */
+    data object HiddenVersion : CheckOutcome
+
     data class Failed(
         val message: String,
         /** Network/HTTP failure that may affect the whole source, not just this app. */

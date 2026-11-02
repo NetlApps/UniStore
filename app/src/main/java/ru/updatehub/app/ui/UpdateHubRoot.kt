@@ -55,6 +55,7 @@ private object Routes {
     const val MAIN = "main"
     const val ADD = "add"
     const val SETTINGS = "settings"
+    const val FEEDBACK = "feedback"
     const val SETTINGS_SECTION = "section"
     const val SETTINGS_ROUTE = "$SETTINGS?$SETTINGS_SECTION={$SETTINGS_SECTION}"
 
@@ -199,8 +200,10 @@ fun UpdateHubRoot(viewModel: AppViewModel) {
                                         onMessage = viewModel::showMessage,
                                         onRemove = viewModel::removePackage,
                                         onSetFilter = viewModel::setFilter,
+                                        onSelectStore = viewModel::selectStoreFilter,
                                         onRetry = viewModel::checkUpdates,
                                         onUpdate = viewModel::updateApp,
+                                        onUpdateFromStore = viewModel::updateAppFromStore,
                                         onOpenStore = viewModel::openInStore,
                                         onCancelInstall = viewModel::cancelInstall,
                                         onUpdateAll = viewModel::updateAll,
@@ -250,10 +253,22 @@ fun UpdateHubRoot(viewModel: AppViewModel) {
                                             viewModel.setSearch("")
                                             navController.navigate(Routes.ADD)
                                         },
+                                        onCheckSelfUpdate = viewModel::checkSelfUpdate,
+                                        onDownloadSelfUpdate = viewModel::downloadSelfUpdate,
+                                        onOpenSelfUpdatePage = viewModel::openSelfUpdatePage,
+                                        onFeedback = { navController.navigate(Routes.FEEDBACK) },
                                         onMessage = viewModel::showMessage,
                                         initialSection = SettingsSection.fromKey(
                                             entry.arguments?.getString(Routes.SETTINGS_SECTION)
                                         )
+                                    )
+                                }
+
+                                composable(Routes.FEEDBACK) {
+                                    FeedbackScreen(
+                                        onBack = { navController.popBackStack() },
+                                        onMessage = viewModel::showMessage,
+                                        buildReport = viewModel::buildFeedbackReport
                                     )
                                 }
                             }

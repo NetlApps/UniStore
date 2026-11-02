@@ -22,7 +22,13 @@ internal data class ApkPureRelease(
     val signatureSha1: String?,
     val title: String?,
     val downloadUrl: String?,
-    val details: VersionDetails
+    val details: VersionDetails,
+    /**
+     * True when the release came from the compact detail endpoint, which has
+     * no ABI/minSdk data. Compatibility must be fetched separately instead of
+     * trusting an empty architecture list.
+     */
+    val fromDetailOnly: Boolean = false
 ) {
     fun toOutcome(): CheckOutcome.Found = CheckOutcome.Found(
         versionName = versionName,
@@ -44,8 +50,10 @@ internal sealed interface ApkPureApiResult {
 
 internal object ApkPureApi {
     const val ROUTE_NAME = "APKPure API"
+    const val DETAIL_ROUTE_NAME = "APKPure detail API"
 
     private const val API_BASE = "https://tapi.pureapk.com/v3/get_app_his_version"
+    private const val DETAIL_API_BASE = "https://tapi.pureapk.com/v3/get_app_detail"
     private const val CACHE_TTL_MS = 2 * 60 * 1000L
 
     private val universalAbis = setOf("universal", "all", "noarch", "unlimited")
@@ -85,6 +93,20 @@ internal object ApkPureApi {
         .toString()
 
     /**
+     * Compact current-version endpoint. It answers with roughly 20 KB instead
+     * of the 300 KB history list, so a full check no longer transfers hundreds
+     * of megabytes just to learn that every app is up to date. ABI data is
+     * fetched from the history endpoint only for apps that really have an
+     * update.
+     */
+    fun detailUrl(packageName: String): String = DETAIL_API_BASE.toHttpUrl()
+        .newBuilder()
+        .addQueryParameter("package_name", packageName)
+        .addQueryParameter("hl", "en")
+        .build()
+        .toString()
+
+    /**
      * Best-effort lookup for the download resolver. Network errors are turned
      * into null; check() uses [parse] directly so it can show a useful error.
      */
@@ -93,7 +115,7 @@ internal object ApkPureApi {
         deviceAbis: List<String> = emptyList(),
         sdkInt: Int = Build.VERSION.SDK_INT
     ): ApkPureRelease? {
-        cached(packageName, deviceAbis)?.let { return it }
+        cached(packageName, deviceAbis)?.takeIf { !it.fromDetailOnly }?.let { return it }
         return try {
             val response = Http.get(url(packageName), headers(sdkInt))
             if (response.code !in 200..299) {
@@ -138,6 +160,50 @@ internal object ApkPureApi {
 
     private fun cacheKey(packageName: String, deviceAbis: List<String>): String =
         packageName + "|" + deviceAbis.joinToString(",")
+
+    /**
+     * Parses the compact current-version response. It has no ABI/minSdk data:
+     * [ApkPureRelease.fromDetailOnly] tells the checker and the repository to
+     * request the history list before trusting compatibility.
+     */
+    fun parseDetail(body: String): ApkPureApiResult {
+        val root = runCatching { JSONObject(body) }.getOrNull()
+            ?: return ApkPureApiResult.Failed("APKPure detail API вернул некорректный ответ")
+
+        val code = root.optInt("retcode", -1)
+        if (code != 0) {
+            val message = root.optString("errmsg")
+                .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            return ApkPureApiResult.Failed(
+                message?.let { "APKPure detail API: $it" }
+                    ?: "APKPure detail API вернул код $code",
+                retryable = code == 429 || code >= 500
+            )
+        }
+
+        val detail = root.optJSONObject("app_detail") ?: return ApkPureApiResult.Missing
+        val versionName = firstNonBlank(
+            detail.optString("version_name"),
+            detail.optString("versionName")
+        ).orEmpty()
+        if (versionName.isBlank() || chromeOsMarker.containsMatchIn(versionName)) {
+            return ApkPureApiResult.Missing
+        }
+
+        val hash = detail.signatureHash()
+        return ApkPureApiResult.Found(
+            ApkPureRelease(
+                versionName = versionName,
+                versionCode = detail.versionCode(),
+                signature = hash?.takeIf { it.length == 64 },
+                signatureSha1 = hash?.takeIf { it.length == 40 },
+                title = firstNonBlank(detail.optString("title"), detail.optString("label")),
+                downloadUrl = null,
+                details = VersionDetails(),
+                fromDetailOnly = true
+            )
+        )
+    }
 
     /**
      * Parses the API response and picks one installable variant of the newest

@@ -93,7 +93,9 @@ class GooglePlayChecker : StoreChecker, StorePrefetcher {
                 RouteResult.NotFound -> CheckOutcome.NotFound
                 is RouteResult.Failed -> {
                     if (result.message.contains(HIDDEN_VERSION)) {
-                        hiddenVersionOutcome()
+                        hiddenUntil[packageName] =
+                            System.currentTimeMillis() + HIDDEN_TTL_MS
+                        CheckOutcome.HiddenVersion
                     } else {
                         Log.w("UpdateHub", "Google Play $packageName: ${result.message}")
                         CheckOutcome.Failed(
@@ -104,11 +106,6 @@ class GooglePlayChecker : StoreChecker, StorePrefetcher {
                     }
                 }
             }
-        }
-        if (outcome is CheckOutcome.Failed &&
-            outcome.message.contains(HIDDEN_VERSION)
-        ) {
-            hiddenUntil[packageName] = System.currentTimeMillis() + HIDDEN_TTL_MS
         }
         return outcome
     }
@@ -288,9 +285,8 @@ class GooglePlayChecker : StoreChecker, StorePrefetcher {
         return true
     }
 
-    private fun hiddenVersionOutcome() = CheckOutcome.Failed(
-        "Google Play скрывает версию для этого приложения"
-    )
+    private fun hiddenVersionOutcome() =
+        CheckOutcome.HiddenVersion
 
     private suspend fun checkRoutes(
         packageName: String,

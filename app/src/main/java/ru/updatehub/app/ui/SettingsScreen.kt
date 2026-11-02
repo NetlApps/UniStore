@@ -6,6 +6,9 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -55,15 +58,23 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Storefront
+import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -106,8 +117,10 @@ import ru.updatehub.app.ui.components.StoreHealthDot
 import ru.updatehub.app.ui.components.formatLastCheck
 import ru.updatehub.app.ui.components.pluralRu
 import ru.updatehub.app.data.storeHealthLabel
+import ru.updatehub.app.ui.theme.LocalReduceMotion
 import ru.updatehub.app.ui.theme.pressScale
 import ru.updatehub.app.ui.theme.rememberAnimatedColor
+import kotlin.math.roundToInt
 
 private data class ThemeModeOption(
     val mode: ThemeMode,
@@ -150,17 +163,19 @@ private val intervalOptions = listOf(6, 12, 24, 48)
  */
 enum class SettingsSection(val key: String, val itemIndex: Int) {
     TOP("top", 0),
-    APPEARANCE("appearance", 0),
-    SEASONAL("seasonal", 1),
-    APPS("apps", 2),
-    SOURCES("sources", 3),
-    MANUAL_STORES("manual_stores", 4),
-    DEVICE("device", 5),
-    PERFORMANCE("performance", 6),
-    BACKGROUND("background", 7),
-    CHECK("check", 8),
-    SYSTEM("system", 9),
-    ABOUT("about", 10);
+    SELF_UPDATE("self_update", 0),
+    APPEARANCE("appearance", 1),
+    SEASONAL("seasonal", 2),
+    APPS("apps", 3),
+    SOURCES("sources", 4),
+    MANUAL_STORES("manual_stores", 5),
+    DEVICE("device", 6),
+    PERFORMANCE("performance", 7),
+    BACKGROUND("background", 8),
+    CHECK("check", 9),
+    SYSTEM("system", 10),
+    FEEDBACK("feedback", 11),
+    ABOUT("about", 12);
 
     companion object {
         fun fromKey(key: String?): SettingsSection =
@@ -185,6 +200,10 @@ fun SettingsScreen(
     onCheckSystemApps: (Boolean) -> Unit,
     onCheck: () -> Unit,
     onManageApps: () -> Unit,
+    onCheckSelfUpdate: () -> Unit,
+    onDownloadSelfUpdate: () -> Unit,
+    onOpenSelfUpdatePage: () -> Unit,
+    onFeedback: () -> Unit,
     onMessage: (String) -> Unit,
     initialSection: SettingsSection = SettingsSection.TOP
 ) {
@@ -206,6 +225,14 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) {
         onRefreshStoreHealth()
+    }
+    // One GitHub request per settings visit, and only until the first answer
+    // is known. The release block must not report "актуально" before it has
+    // actually asked.
+    LaunchedEffect(Unit) {
+        if (!state.selfUpdate.checking && state.selfUpdate.info.latestVersion == null) {
+            onCheckSelfUpdate()
+        }
     }
     val installedMap = remember(state.installed) {
         state.installed.associateBy { it.packageName }
@@ -282,8 +309,19 @@ fun SettingsScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    item(key = "appearance") {
+                    item(key = "self_update") {
                         StaggeredAppear(index = 0) {
+                            SelfUpdateSection(
+                                state = state.selfUpdate,
+                                onCheck = onCheckSelfUpdate,
+                                onDownload = onDownloadSelfUpdate,
+                                onOpenPage = onOpenSelfUpdatePage
+                            )
+                        }
+                    }
+
+                    item(key = "appearance") {
+                        StaggeredAppear(index = 1) {
                             AppearanceSection(
                                 mode = state.settings.themeMode,
                                 palette = state.settings.palette,
@@ -294,7 +332,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "seasonal") {
-                        StaggeredAppear(index = 1) {
+                        StaggeredAppear(index = 2) {
                             SeasonalSection(
                                 selected = state.settings.seasonalTheme,
                                 onSelect = onSeasonalTheme
@@ -303,7 +341,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "apps") {
-                        StaggeredAppear(index = 2) {
+                        StaggeredAppear(index = 3) {
                             AppsSettingsSection(
                                 trackedCount = trackedCount,
                                 installedCount = installedCount,
@@ -313,7 +351,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "sources") {
-                        StaggeredAppear(index = 3) {
+                        StaggeredAppear(index = 4) {
                             SourcesSettingsSection(
                                 enabledSources = state.settings.enabledSources,
                                 storeHealth = state.storeHealth,
@@ -324,7 +362,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "manual_stores") {
-                        StaggeredAppear(index = 4) {
+                        StaggeredAppear(index = 5) {
                             ManualStoresSection(
                                 stores = manualStores,
                                 onOpenStore = onOpenManualStore
@@ -333,13 +371,13 @@ fun SettingsScreen(
                     }
 
                     item(key = "device") {
-                        StaggeredAppear(index = 5) {
+                        StaggeredAppear(index = 6) {
                             DeviceSection(profile = state.deviceProfile)
                         }
                     }
 
                     item(key = "performance") {
-                        StaggeredAppear(index = 6) {
+                        StaggeredAppear(index = 7) {
                             WeakDeviceSection(
                                 enabled = state.settings.weakDevice,
                                 profile = state.deviceProfile,
@@ -349,7 +387,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "background") {
-                        StaggeredAppear(index = 7) {
+                        StaggeredAppear(index = 8) {
                             BackgroundCheckSection(
                                 autoCheck = state.settings.autoCheck,
                                 intervalHours = state.settings.intervalHours,
@@ -360,7 +398,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "check") {
-                        StaggeredAppear(index = 8) {
+                        StaggeredAppear(index = 9) {
                             CheckNowSection(
                                 lastCheckAt = state.settings.lastCheckAt,
                                 trackedCount = trackedCount,
@@ -371,7 +409,7 @@ fun SettingsScreen(
                     }
 
                     item(key = "system") {
-                        StaggeredAppear(index = 9) {
+                        StaggeredAppear(index = 10) {
                             SystemAppsSection(
                                 checkSystemApps = state.settings.checkSystemApps,
                                 onCheckSystemApps = onCheckSystemApps
@@ -379,8 +417,14 @@ fun SettingsScreen(
                         }
                     }
 
+                    item(key = "feedback") {
+                        StaggeredAppear(index = 11) {
+                            FeedbackSection(onFeedback = onFeedback)
+                        }
+                    }
+
                     item(key = "about") {
-                        StaggeredAppear(index = 10) {
+                        StaggeredAppear(index = 12) {
                             AboutSection(
                                 installedCount = installedCount,
                                 trackedCount = trackedCount
@@ -389,6 +433,302 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SelfUpdateSection(
+    state: SelfUpdateState,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onOpenPage: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    val info = state.info
+    val busy = state.downloading || state.verifying || state.installing
+    val reduceMotion = LocalReduceMotion.current
+
+    // The block must answer "актуально или нет" as soon as Settings opens.
+    // A failed check keeps its error and waits for an explicit retry, so an
+    // offline phone does not repeat the request on every visit.
+    LaunchedEffect(Unit) {
+        if (info.latestVersion == null && info.error == null && !state.checking) {
+            onCheck()
+        }
+    }
+
+    // The downloader reports bytes in bursts. Animating the fraction between
+    // two reports makes the bar and the counter move continuously instead of
+    // jumping from 17% to 23% once per network chunk.
+    val rawProgress = state.progress
+    val animatedProgress by animateFloatAsState(
+        targetValue = rawProgress ?: 0f,
+        animationSpec = if (reduceMotion) {
+            snap()
+        } else {
+            tween(durationMillis = 420, easing = LinearEasing)
+        },
+        label = "selfUpdateProgress"
+    )
+    val animatedPercent = (animatedProgress * 100f).roundToInt().coerceIn(0, 100)
+
+    SectionCard(contentPadding = PaddingValues(18.dp)) {
+        SectionTitle(
+            icon = Icons.Rounded.SystemUpdate,
+            title = "Обновление UniStore",
+            subtitle = "Установлена версия ${info.currentVersion}"
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        when {
+            state.downloading -> {
+                Text(
+                    text = "Скачиваем обновление с GitHub…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurface
+                )
+                Spacer(Modifier.height(9.dp))
+                if (rawProgress != null) {
+                    LinearProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp),
+                        color = scheme.primary,
+                        trackColor = scheme.surfaceContainerHighest
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "$animatedPercent%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.onSurfaceVariant
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp),
+                        color = scheme.primary,
+                        trackColor = scheme.surfaceContainerHighest
+                    )
+                }
+            }
+
+            state.verifying -> Text(
+                text = "Проверяем SHA-256 и подпись APK…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurface
+            )
+
+            state.installing -> Text(
+                text = "Подтвердите установку в системном окне Android.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurface
+            )
+
+            state.checking && info.latestVersion == null -> Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = scheme.primary
+                )
+                Spacer(Modifier.width(9.dp))
+                Text(
+                    text = "Проверяем GitHub…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant
+                )
+            }
+
+            info.updateAvailable -> {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(scheme.primary.copy(alpha = 0.13f)),
+                        contentAlignment = androidx.compose.ui.Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = null,
+                            tint = scheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(11.dp))
+                    Column {
+                        Text(
+                            text = "Доступна версия ${info.latestVersion}",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = scheme.onSurface
+                        )
+                        Text(
+                            text = "Скачается с GitHub и пройдёт проверку подписи",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                if (!info.downloadUrl.isNullOrBlank()) {
+                    Button(
+                        onClick = onDownload,
+                        enabled = !busy && !state.checking,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(15.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text("Скачать и установить")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onOpenPage,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(15.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text("Открыть страницу релиза")
+                    }
+                }
+            }
+
+            info.error != null -> {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Rounded.Info,
+                        contentDescription = null,
+                        tint = scheme.error,
+                        modifier = Modifier.size(19.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = info.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.error
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Проверить обновление можно на странице релизов GitHub.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant
+                )
+            }
+
+            info.latestVersion == null -> Text(
+                text = "Проверьте наличие новой версии на GitHub.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant
+            )
+
+            else -> Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = scheme.secondary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "У вас актуальная версия приложения",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurface
+                )
+            }
+        }
+
+        state.error?.takeIf { !state.installing && it != info.error }?.let { error ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.error
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            TextButton(
+                onClick = onCheck,
+                enabled = !busy && !state.checking
+            ) {
+                Text(if (state.checking) "Проверяем…" else "Проверить снова")
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onOpenPage) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(Modifier.width(5.dp))
+                Text("GitHub")
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeedbackSection(onFeedback: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    SectionCard(contentPadding = PaddingValues(18.dp)) {
+        SectionTitle(
+            icon = Icons.Rounded.BugReport,
+            title = "Обратная связь",
+            subtitle = "Ошибки, нестабильность и пожелания"
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = "UniStore записывает последние действия и сохраняет отчёт о сбое. " +
+                "При отправке в отчёт попадут модель телефона, версия Android, версия " +
+                "приложения и эти действия — без личных файлов и переписки.",
+            style = MaterialTheme.typography.labelSmall,
+            color = scheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onFeedback,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            shape = RoundedCornerShape(15.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.BugReport,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(7.dp))
+            Text("Сообщить о проблеме")
         }
     }
 }

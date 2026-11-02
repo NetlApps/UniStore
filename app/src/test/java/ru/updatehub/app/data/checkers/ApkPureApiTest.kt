@@ -195,6 +195,53 @@ class ApkPureApiTest {
     }
 
     @Test
+    fun `detail endpoint gives version, code and signature without abi data`() {
+        val json = """
+            {
+              "retcode": 0,
+              "errmsg": "",
+              "app_detail": {
+                "title": "WhatsApp",
+                "version_name": "2.26.42.74",
+                "version_code": "264207400",
+                "sign": "$sha1"
+              }
+            }
+        """.trimIndent()
+
+        val result = ApkPureApi.parseDetail(json)
+
+        assertTrue(result is ApkPureApiResult.Found)
+        val release = (result as ApkPureApiResult.Found).release
+        assertEquals("2.26.42.74", release.versionName)
+        assertEquals(264207400L, release.versionCode)
+        assertEquals(sha1, release.signatureSha1)
+        assertEquals("WhatsApp", release.title)
+        assertTrue(release.fromDetailOnly)
+        assertTrue(release.details.architectures.isEmpty())
+    }
+
+    @Test
+    fun `detail endpoint rejects chromeos build for a phone app`() {
+        // The real APKPure answer for Pinterest is 2000000000.0.0-CrOS while
+        // the phone release is 14.x. The compact route must fall through to
+        // the history list instead of turning this into an update.
+        val json = """
+            {
+              "retcode": 0,
+              "app_detail": {
+                "title": "Pinterest",
+                "version_name": "2000000000.0.0-CrOS",
+                "version_code": "2000000000",
+                "sign": "b6a74dbcb894b0f73d8c485c72eb1247a8f027ca"
+              }
+            }
+        """.trimIndent()
+
+        assertEquals(ApkPureApiResult.Missing, ApkPureApi.parseDetail(json))
+    }
+
+    @Test
     fun `api url and headers match the public endpoint`() {
         val url = ApkPureApi.url("com.whatsapp")
         assertTrue(url.startsWith("https://tapi.pureapk.com/v3/get_app_his_version?"))

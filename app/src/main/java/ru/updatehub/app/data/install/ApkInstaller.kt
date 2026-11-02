@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.content.pm.PackageInfoCompat
 import ru.updatehub.app.data.InstalledApp
 import ru.updatehub.app.data.SignatureUtils
+import ru.updatehub.app.data.UpdateSource
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -190,7 +191,11 @@ class ApkInstaller(private val context: Context) {
      * `ACTION_VIEW` installer cannot handle split APKs. The system still shows
      * its own confirmation window; the result comes back to [ApkInstallReceiver].
      */
-    fun install(bundle: DownloadedApkBundle, versionName: String): Boolean {
+    fun install(
+        bundle: DownloadedApkBundle,
+        versionName: String,
+        source: UpdateSource? = null
+    ): Boolean {
         val installer = context.packageManager.packageInstaller
         val sessionParams = PackageInstaller.SessionParams(
             PackageInstaller.SessionParams.MODE_FULL_INSTALL
@@ -223,6 +228,9 @@ class ApkInstaller(private val context: Context) {
                 action = ApkInstallReceiver.ACTION_INSTALL_STATUS
                 putExtra(ApkInstallReceiver.EXTRA_PACKAGE_NAME, bundle.packageName)
                 putExtra(ApkInstallReceiver.EXTRA_VERSION_NAME, versionName)
+                source?.let {
+                    putExtra(ApkInstallReceiver.EXTRA_SOURCE_KEY, it.key)
+                }
             }
             val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

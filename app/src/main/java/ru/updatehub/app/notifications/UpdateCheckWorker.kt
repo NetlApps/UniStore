@@ -8,7 +8,7 @@ import ru.updatehub.app.UpdateHubApp
 import ru.updatehub.app.data.ResultSerializer
 import ru.updatehub.app.data.UpdateSource
 import ru.updatehub.app.data.UpdateStatus
-import ru.updatehub.app.data.incompatibleUpdateKey
+import ru.updatehub.app.data.isIncompatibleUpdate
 
 class UpdateCheckWorker(
     appContext: Context,
@@ -70,8 +70,12 @@ class UpdateCheckWorker(
             val updates = results.values.filter { result ->
                 result.status == UpdateStatus.UPDATE_AVAILABLE &&
                     result.best?.let { version ->
-                        incompatibleUpdateKey(result.packageName, version.versionName) !in
-                            settings.incompatibleUpdates
+                        !isIncompatibleUpdate(
+                            keys = settings.incompatibleUpdates,
+                            packageName = result.packageName,
+                            versionName = version.versionName,
+                            source = version.source
+                        )
                     } == true
             }
             if (updates.isNotEmpty()) {

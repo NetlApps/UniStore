@@ -178,14 +178,18 @@ internal object ApkArchiveInspector {
         return null
     }
 
-    private fun readUInt32(raf: RandomAccessFile): Long {
-        val value = raf.readInt().toLong() and 0xFFFFFFFFL
-        return value
-    }
+    /**
+     * ZIP and APK Signing Block store multi-byte fields little-endian.
+     * [RandomAccessFile] reads big-endian, so every 32-bit half is reversed
+     * before use. Reading these fields as big-endian made the manual split
+     * signature check return null for every valid XAPK.
+     */
+    private fun readUInt32(raf: RandomAccessFile): Long =
+        Integer.toUnsignedLong(Integer.reverseBytes(raf.readInt()))
 
     private fun readUInt64(raf: RandomAccessFile): Long? {
-        val high = raf.readInt().toLong() and 0xFFFFFFFFL
-        val low = raf.readInt().toLong() and 0xFFFFFFFFL
+        val low = Integer.toUnsignedLong(Integer.reverseBytes(raf.readInt()))
+        val high = Integer.toUnsignedLong(Integer.reverseBytes(raf.readInt()))
         if (high > 0x7FFFFFFFL) return null
         return (high shl 32) or low
     }

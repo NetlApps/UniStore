@@ -63,7 +63,8 @@ class SettingsRepository(private val context: Context) {
                 lastCheckAt = preferences[Keys.lastCheckAt] ?: 0L,
                 resultsJson = preferences[Keys.resultsJson].orEmpty(),
                 checkSystemApps = preferences[Keys.checkSystemApps] ?: false,
-                incompatibleUpdates = preferences[Keys.incompatibleUpdates].orEmpty()
+                incompatibleUpdates = preferences[Keys.incompatibleUpdates].orEmpty(),
+                storeFilterKey = preferences[Keys.storeFilterKey].orEmpty()
             )
         }
 
@@ -181,6 +182,10 @@ class SettingsRepository(private val context: Context) {
         context.updateHubDataStore.edit { it[Keys.checkSystemApps] = value }
     }
 
+    suspend fun setStoreFilterKey(key: String) {
+        context.updateHubDataStore.edit { it[Keys.storeFilterKey] = key }
+    }
+
     suspend fun setLastCheckAt(timestamp: Long) {
         context.updateHubDataStore.edit { it[Keys.lastCheckAt] = timestamp }
     }
@@ -201,9 +206,13 @@ class SettingsRepository(private val context: Context) {
      * checks can hide it instead of offering an install that is guaranteed to
      * fail. A newer version gets a new key and is checked again.
      */
-    suspend fun markUpdateIncompatible(packageName: String, versionName: String) {
+    suspend fun markUpdateIncompatible(
+        packageName: String,
+        versionName: String,
+        source: UpdateSource? = null
+    ) {
         if (packageName.isBlank() || versionName.isBlank()) return
-        val key = incompatibleUpdateKey(packageName, versionName)
+        val key = incompatibleUpdateKey(packageName, versionName, source)
         context.updateHubDataStore.edit { preferences ->
             val current = preferences[Keys.incompatibleUpdates].orEmpty()
             if (key !in current) {
@@ -242,5 +251,6 @@ class SettingsRepository(private val context: Context) {
         val checkSystemApps = booleanPreferencesKey("check_system_apps")
         val sourcesInitialized = booleanPreferencesKey("sources_initialized")
         val incompatibleUpdates = stringSetPreferencesKey("incompatible_updates")
+        val storeFilterKey = stringPreferencesKey("store_filter_key")
     }
 }
