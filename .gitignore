@@ -22,7 +22,7 @@ captures/
 *.dex
 *.class
 *.log
-!UniStore-1.1.8.apk
+# The current release APK shipped from the repository root
 !UniStore-1.2.0.apk
 
 # Local toolchain and research data

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logo-variants/png/v6-crystal-u-512.png" width="132" alt="UniStore" />
+  <img src="docs/assets/logo.png" width="132" alt="UniStore" />
 
   <h1>UniStore</h1>
 
